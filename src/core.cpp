@@ -2,7 +2,7 @@
 namespace lshift {
 Gesture::Gesture(Settings settings) noexcept : settings_(settings) {}
 bool Gesture::Feed(const KeyEvent& event) noexcept {
-    if(event.key >= held_.size()) { stage_ = 0; return false; }
+    if(!KeyboardChordKey(event.key)) { stage_ = 0; return false; }
     DeviceKeys* device = nullptr;
     for(auto& candidate : devices_) {
         if(candidate.used && candidate.id == event.device) { device = &candidate; break; }
@@ -58,7 +58,9 @@ void Gesture::Reset() noexcept {
     devices_ = {};
 }
 void Gesture::SetSettings(Settings settings) noexcept { settings_ = settings; Reset(); }
-void Gesture::SetHeld(std::uint16_t key, bool held) noexcept { if(key < held_.size()) held_[key] = held; }
+void Gesture::SetHeld(std::uint16_t key, bool held) noexcept {
+    if(KeyboardChordKey(key)) held_[key] = held;
+}
 namespace {
 constexpr std::wstring_view kUs = L"`1234567890-=qwertyuiop[]\\asdfghjkl;'zxcvbnm,./";
 constexpr std::wstring_view kRu = L"ё1234567890-=йцукенгшщзхъ\\фывапролджэячсмитьбю.";

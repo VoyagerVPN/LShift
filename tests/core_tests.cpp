@@ -28,6 +28,50 @@ int main() {
         Gesture walking;
         walking.SetHeld(0x57, true);
         Require(!Pair(walking), "held W prevents a gesture even before the first tap");
+        Gesture system_commands;
+        system_commands.SetHeld(0xB3, true);
+        (void)system_commands.Feed({0xAF, true, 10, 1, 2});
+        Require(Pair(system_commands),
+                "media commands from startup and raw input must not block double Shift");
+        // Проверяем классы команд и реальные способы появления состояния, а не один VK.
+        constexpr std::uint16_t commands[]{0x5F, 0xA6, 0xAC, 0xAD, 0xAE, 0xAF,
+                                           0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7,
+                                           0x07, 0x40, 0x88, 0xB8, 0xC3, 0xFF, 0x100};
+        for(const auto command : commands) {
+            Gesture startup;
+            startup.SetHeld(command, true);
+            Require(Pair(startup), "system command state must not block the keyboard gesture");
+            Gesture raw;
+            (void)raw.Feed({command, true, 10, 1, 2});
+            Require(Pair(raw), "system command without key-up must not poison raw key tracking");
+        }
+        Gesture command_devices;
+        for(std::uintptr_t device = 2; device < 20; ++device)
+            (void)command_devices.Feed({0xB3, true, device, 1, device});
+        Require(Pair(command_devices), "command-only devices must not exhaust keyboard tracking slots");
+        constexpr std::uint16_t chord_keys[]{0x08, 0x09, 0x0D, 0x20, 0x25, 0x2E, 0x30,
+                                             0x41, 0x57, 0x5B, 0x60, 0x70, 0x87,
+                                             0xA1, 0xA2, 0xA4, 0xBA, 0xDB, 0xE2};
+        for(const auto key : chord_keys) {
+            Gesture startup;
+            startup.SetHeld(key, true);
+            Require(!Pair(startup), "held keyboard key still blocks a gesture from startup");
+            Gesture raw;
+            (void)raw.Feed({key, true, 10, 1, 2});
+            Require(!Pair(raw), "held keyboard key on another device still blocks a gesture");
+        }
+        Gesture interrupted;
+        (void)interrupted.Feed({0xA0, true, 10, 1, 1});
+        (void)interrupted.Feed({0xA0, false, 20, 1, 1});
+        (void)interrupted.Feed({0xB3, true, 30, 1, 2});
+        (void)interrupted.Feed({0xA0, true, 40, 1, 1});
+        Require(!interrupted.Feed({0xA0, false, 50, 1, 1}),
+                "an intervening command cancels the partial gesture without a permanent block");
+        Gesture released_keyboard;
+        (void)released_keyboard.Feed({0x57, true, 10, 1, 2});
+        (void)released_keyboard.Feed({0x57, false, 20, 1, 2});
+        Require(Pair(released_keyboard), "normal keyboard release restores gesture eligibility");
+        std::cout << "PASS: command classes, keyboard guards and device capacity\n";
         Gesture changed_window;
         Require(!Pair(changed_window, 0xA0, 2), "focus switch between taps cancels");
         Gesture changed_device;

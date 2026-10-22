@@ -123,6 +123,7 @@ private:
         detector_.Reset();
         recent_.Reset((GetKeyState(VK_CAPITAL) & 1) != 0);
         for(std::uint16_t key = 8; key < 255; ++key) {
+            if(!lshift::KeyboardChordKey(key)) continue;
             if(key == VK_SHIFT || key == VK_CONTROL || key == VK_MENU) continue;
             detector_.SetHeld(key, (GetAsyncKeyState(key) & 0x8000) != 0);
             if((key >= VK_LSHIFT && key <= VK_RMENU) || key == VK_LWIN || key == VK_RWIN) {
@@ -218,6 +219,7 @@ private:
         }
         // Проверка только готового жеста дополняет Raw Input состоянием клавиш до запуска.
         for(int key_code = 8; key_code < 255; ++key_code) {
+            if(!lshift::KeyboardChordKey(static_cast<std::uint16_t>(key_code))) continue;
             if((GetAsyncKeyState(key_code) & 0x8000) != 0) {
                 Trace(lshift::DiagnosticEvent::Gesture, lshift::DiagnosticReason::HeldKey);
                 return;

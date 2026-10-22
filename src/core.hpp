@@ -18,6 +18,17 @@ struct KeyEvent {
     std::uintptr_t context = 0;
     std::uintptr_t device = 0;
 };
+// Клавиши ввода, навигации и сочетаний по таблице Windows Virtual-Key Codes.
+// Системные команды (медиа, браузер, запуск приложений), gamepad и резервные
+// коды не образуют удерживаемое клавиатурное сочетание с двойным Shift.
+[[nodiscard]] constexpr bool KeyboardChordKey(std::uint16_t key) noexcept {
+    return (key >= 0x08 && key <= 0x09) || (key >= 0x0C && key <= 0x0D) ||
+           (key >= 0x10 && key <= 0x39) || (key >= 0x41 && key <= 0x5D) ||
+           (key >= 0x60 && key <= 0x87) || (key >= 0x90 && key <= 0x96) ||
+           (key >= 0xA0 && key <= 0xA5) || (key >= 0xBA && key <= 0xC0) ||
+           (key >= 0xDB && key <= 0xDF) || key == 0xE2 ||
+           (key >= 0xF6 && key <= 0xFE);
+}
 class Gesture {
 public:
     explicit Gesture(Settings settings = {}) noexcept;
