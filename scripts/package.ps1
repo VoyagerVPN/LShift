@@ -13,8 +13,11 @@ if ((Get-Item -LiteralPath $packageExe).VersionInfo.FileVersion -ne $packageVers
 $packageReadme = Join-Path $packageRoot 'resources\README.txt'
 Copy-Item -LiteralPath $packageReadme -Destination (Join-Path $packageDist 'README.txt') -Force
 $packageFiles = @($packageExe, (Join-Path $packageDist 'README.txt'))
-$packageLicense = Join-Path $packageRoot 'LICENSE'
-if (Test-Path -LiteralPath $packageLicense) { $packageFiles += $packageLicense }
+foreach ($packageNotice in @('LICENSE', 'NOTICE')) {
+    $packageNoticePath = Join-Path $packageRoot $packageNotice
+    if (!(Test-Path -LiteralPath $packageNoticePath)) { throw "Required distribution notice is missing: $packageNotice" }
+    $packageFiles += $packageNoticePath
+}
 $packageArchive = Join-Path $packageDist "LShift-$packageVersion-win-x64.zip"
 Compress-Archive -LiteralPath $packageFiles -DestinationPath $packageArchive -Force
 Add-Type -AssemblyName System.IO.Compression.FileSystem
