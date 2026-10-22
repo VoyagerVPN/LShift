@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<title>LShift Automation Fixture</title>
+<style>
+  body { max-width: 720px; margin: 28px auto; padding: 0 20px; font: 16px system-ui; }
+  label { display: block; margin: 18px 0 6px; }
+  input, textarea, [contenteditable] { box-sizing: border-box; width: 100%; padding: 10px; border: 1px solid #777; font: 18px monospace; white-space: pre-wrap; }
+  [contenteditable] { min-height: 90px; }
+  p { color: #444; }
+</style>
+<p id="context-before"></p>
+<h1>Проверка текстового ввода LShift</h1>
+<p>Отдельная тестовая страница. Автоматизация работает только с этими полями.</p>
+<label for="plain">Обычный input</label><input id="plain" autocomplete="off" spellcheck="false">
+<label for="multi">Textarea</label><textarea id="multi" rows="5" spellcheck="false"></textarea>
+<label for="rich">Contenteditable</label><div id="rich" contenteditable="true" role="textbox" aria-multiline="true" spellcheck="false"></div>
+<p id="context-after"></p>
+<script>
+(() => {
+  let active = null;
+  let events = [];
+  let keys = [];
+  let preventPaste = false;
+  let autoPair = false;
+  let preventSelectAll = false;
+  let preventedPastes = 0;
+  let allowedTextValues = null;
+  let observation = {running: false, nonempty: 0, ctrlShiftLeft: 0, sources: {}, first: null};
+  const fields = {input: document.querySelector('#plain'), textarea: document.querySelector('#multi'), contenteditable: document.querySelector('#rich')};
+  for (const element of Object.values(fields)) element.addEventListener('input', event => {
+    if (element === active) events.push({type: event.inputType, trusted: event.isTrusted, dataLength: event.data?.length ?? 0});
+  });
+  for (const element of Object.values(fields)) element.addEventListener('keydown', event => {
+    if(element === active && preventSelectAll && event.ctrlKey && event.code === 'KeyA') event.preventDefault();
+    if (element === active) keys.push({code: event.code, ctrl: event.ctrlKey, shift: event.shiftKey, alt: event.altKey});
+  });
+  for (const element of Object.values(fields)) element.addEventListener('paste', event => {
+    if (element === active && preventPaste) { event.preventDefault(); ++preventedPastes; }
+  });
+  // Собственный input моделирует редактор с автоматическими парными скобками.
+  fields.input.addEventListener('beforeinput', event => {
+    if (active !== fields.input || !autoPair || event.inputType !== 'insertText' || event.data !== '(') return;
+    const start = active.selectionStart;
+    const end = active.selectionEnd;
+    event.preventDefault();
+    active.setRangeText('()', start, end, 'end');
+    active.setSelectionRange(start + 1, start + 1);
+  });
+  fields.input.addEventListener('keydown', event => {
+    if (active !== fields.input || !autoPair || event.key !== 'Backspace') return;
+    const caret = active.selectionStart;
+    if (caret !== active.selectionEnd || active.value[caret - 1] !== '(' || active.value[caret] !== ')') return;
+    event.preventDefault();
+    active.setRangeText('', caret - 1, caret + 1, 'end');
+  });
+  function value() { return active.isContentEditable ? active.innerText.replace(/\r\n/g, '\n') : active.value; }
+  function selection() {
+    if (!active) return {start: null, end: null};
+    if (!active.isContentEditable) return {start: active.selectionStart, end: active.selectionEnd};
+    const selected = getSelection();
+    if (!selected || selected.rangeCount !== 1) return {start: null, end: null};
+    const range = selected.getRangeAt(0);
+    if (!active.contains(range.startContainer) || !active.contains(range.endContainer)) return {start: null, end: null};
+    const prefix = document.createRange();
+    prefix.selectNodeContents(active);
+    prefix.setEnd(range.startContainer, range.startOffset);
+    const start = prefix.toString().length;
+    prefix.setEnd(range.endContainer, range.endOffset);
+    return {start, end: prefix.toString().length};
+  }
+  function sample(source) {
+    if (!observation.running || !active) return;
+    const range = selection();
+    if (range.start !== null && range.end !== null && range.start !== range.end) {
+      ++observation.nonempty;
+      observation.sources[source] = (observation.sources[source] ?? 0) + 1;
+      observation.first ??= {source, ...range};
+    }
+  }
+  document.addEventListener('selectionchange', () => sample('selectionchange'), true);
+  for (const type of ['keydown', 'keyup', 'beforeinput', 'input']) document.addEventListener(type, event => {
+    if (event.target !== active) return;
+    sample(type);
+    if (observation.running && type === 'keydown' && event.code === 'ArrowLeft' && event.ctrlKey && event.shiftKey) {
+      ++observation.ctrlShiftLeft;
+    }
+  }, true);
+  function animationSample() {
+    sample('rAF');
+    if (observation.running && active && allowedTextValues && !allowedTextValues.includes(value())) {
+      ++observation.intermediateTextFrames;
+    }
+    requestAnimationFrame(animationSample);
+  }
+  requestAnimationFrame(animationSample);
+  function beginObservation({allowedValues = null} = {}) {
+    events = [];
+    keys = [];
+    preventedPastes = 0;
+    allowedTextValues = Array.isArray(allowedValues) && allowedValues.every(item => typeof item === 'string') ? [...allowedValues] : null;
+    const range = selection();
+    observation = {running: true, baselineSelected: range.start !== range.end, nonempty: 0, ctrlShiftLeft: 0,
+      intermediateTextFrames: 0, sources: {}, first: null};
+  }
+  window.lshiftFixture = {
+    reset({kind, text, start = text.length, end = start, password = false, readOnly = false,
+      preventPaste: denyPaste = false, autoPair: pair = false, surroundingText = false,
+      preventSelectAll: denySelectAll = false}) {
+      observation.running = false;
+      active = fields[kind];
+      preventPaste = denyPaste;
+      autoPair = pair;
+      preventSelectAll = denySelectAll;
+      document.querySelector('#context-before').textContent = surroundingText ? 'OUTSIDE '.repeat(1024) : '';
+      document.querySelector('#context-after').textContent = surroundingText ? 'AFTER '.repeat(1024) : '';
+      if (!active) throw new Error('unknown fixture field');
+      fields.input.type = password ? 'password' : 'text';
+      fields.input.readOnly = readOnly;
+      if (active.isContentEditable) active.textContent = text;
+      else active.value = text;
+      active.scrollIntoView({block: 'center'});
+      active.focus({preventScroll: true});
+      if (active.isContentEditable) {
+        if (!active.firstChild) active.append(document.createTextNode(''));
+        const range = document.createRange();
+        range.setStart(active.firstChild, start); range.setEnd(active.firstChild, end);
+        const selected = getSelection(); selected.removeAllRanges(); selected.addRange(range);
+      } else active.setSelectionRange(start, end);
+      // Пользовательское выделение из reset — исходное состояние, не действие программы.
+      beginObservation();
+      return {focused: document.hasFocus() && document.activeElement === active, ...selection()};
+    },
+    beginObservation,
+    stopObservation() { sample('finish'); observation.running = false; },
+    oracle() { return {value: value(), ...selection(), inputEvents: [...events], commandKeys: [...keys],
+      preventedPastes, observation: {...observation, sources: {...observation.sources}}, focused: document.hasFocus() && document.activeElement === active}; }
+  };
+})();
+</script>
+</html>

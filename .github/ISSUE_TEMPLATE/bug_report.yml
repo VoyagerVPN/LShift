@@ -1,0 +1,24 @@
+name: Ошибка
+description: Воспроизводимый отказ LShift
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Версия LShift и Windows
+      placeholder: LShift 0.1.7, Windows 11
+    validations:
+      required: true
+  - type: input
+    id: editor
+    attributes:
+      label: Приложение и тип поля
+      description: Например, поле сообщения или стандартный текстовый редактор.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Действия, ожидаемый и фактический результат
+      description: Используйте выдуманный пример текста без личных данных. Укажите, было ли выделение и что показывала подсказка трея.
+    validations:
+      required: true

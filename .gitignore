@@ -1,0 +1,16 @@
+.cache/
+.tgrep/
+dist/
+.vs/
+build/
+out/
+.socraticode.json
+.socraticodeignore
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+*.pdb
+*.obj
+*.ilk
+*.idb
