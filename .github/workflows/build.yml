@@ -1,4 +1,4 @@
-name: Windows build
+name: Сборка Windows
 
 on:
   push:
@@ -12,35 +12,39 @@ permissions:
 
 jobs:
   windows:
+    name: Windows x64 — сборка и проверки
     runs-on: windows-2022
     timeout-minutes: 15
     defaults:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Prepare local cache
+      - name: Получить исходники
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Подготовить локальный кэш
         run: |
           New-Item -ItemType Directory -Path .cache/temp -Force | Out-Null
           "TEMP=$((Resolve-Path .cache/temp).Path)" >> $env:GITHUB_ENV
           "TMP=$((Resolve-Path .cache/temp).Path)" >> $env:GITHUB_ENV
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - name: Подготовить Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
           package-manager-cache: false
-      - name: Generate icons
+      - name: Создать значки
         run: node scripts/make-icon.mjs
-      - name: Configure
+      - name: Подготовить сборку
         run: cmake -S . -B .cache/build -G "Visual Studio 17 2022" -A x64 -DLSHIFT_DIAGNOSTICS=OFF
-      - name: Build
+      - name: Собрать приложение
         run: cmake --build .cache/build --config Release --parallel
-      - name: Test
+      - name: Проверить код
         run: ctest --test-dir .cache/build -C Release --output-on-failure
-      - name: Package and verify ZIP
-        run: ./scripts/package.ps1
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - name: Проверить самостоятельный EXE
+        run: ./scripts/check-release.ps1 -ResourcesOnly
+      - name: Сохранить готовый EXE
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: LShift-win-x64
-          path: dist/LShift-*-win-x64.zip
+          path: dist/LShift.exe
           if-no-files-found: error
           retention-days: 14

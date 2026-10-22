@@ -1,5 +1,6 @@
 name: Ошибка
 description: Воспроизводимый отказ LShift
+labels: ['ошибка']
 body:
   - type: input
     id: version

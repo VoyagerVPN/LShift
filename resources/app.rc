@@ -1,9 +1,11 @@
 #include <windows.h>
 #pragma code_page(65001)
 101 ICON "app.ico"
+201 RCDATA "../LICENSE"
+202 RCDATA "../NOTICE"
 1 VERSIONINFO
- FILEVERSION 0,1,7,0
- PRODUCTVERSION 0,1,7,0
+ FILEVERSION 0,1,8,0
+ PRODUCTVERSION 0,1,8,0
  FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
  FILEFLAGS 0
  FILEOS VOS_NT_WINDOWS32
@@ -11,18 +13,20 @@
 BEGIN
  BLOCK "StringFileInfo"
  BEGIN
-  BLOCK "040904B0"
+  BLOCK "041904B0"
   BEGIN
    VALUE "FileDescription", "LShift\0"
-   VALUE "FileVersion", "0.1.7\0"
+   VALUE "FileVersion", "0.1.8\0"
    VALUE "ProductName", "LShift\0"
-   VALUE "ProductVersion", "0.1.7\0"
+   VALUE "ProductVersion", "0.1.8\0"
    VALUE "InternalName", "LShift\0"
    VALUE "OriginalFilename", "LShift.exe\0"
+   VALUE "LegalCopyright", "Автор: VoyagerVPN. Оригинал: https://github.com/VoyagerVPN/LShift\0"
+   VALUE "Comments", "Лицензия MIT с Commons Clause 1.0. Полные условия встроены в EXE и доступны: https://github.com/VoyagerVPN/LShift/blob/main/LICENSE\0"
   END
  END
  BLOCK "VarFileInfo"
  BEGIN
-  VALUE "Translation", 0x409, 1200
+  VALUE "Translation", 0x419, 1200
  END
 END
