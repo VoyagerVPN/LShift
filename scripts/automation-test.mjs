@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
 import {fileURLToPath, pathToFileURL} from 'node:url';
+import {runLiveCases} from './live-cases.mjs';
 
 // Согласованный контракт: точный текст/курсор/раскладка, отсутствие программного выделения,
 // рабочий Undo и проверки устаревшего контекста. Быстрое удаление и повторный набор допустимы.
@@ -39,6 +40,12 @@ function typedEvents(tokens) {
     }
     else if (token === '<ArrowLeft>') stroke(37, 'ArrowLeft', 'ArrowLeft');
     else if (token === '<Enter>') stroke(13, 'Enter', 'Enter', '\r');
+    else if (token === '<Escape>') stroke(27, 'Escape', 'Escape');
+    else if (/^<Num[0-9]>$/.test(token)) {
+      const digit = token[4];
+      stroke(96 + Number(digit), `Numpad${digit}`, digit, digit);
+    }
+    else if (/^[0-9]$/.test(token)) stroke(token.charCodeAt(0), `Digit${token}`, token, token);
     else if (token === ' ') stroke(32, 'Space', ' ', ' ');
     else if (token === '(' || token === ')') {
       events.push({vk: 160, code: 'ShiftLeft', key: 'Shift', text: '', modifiers: 8, down: true});
@@ -88,6 +95,18 @@ const cases = [
     text: 'hello ghbdtn  ', typed: true, tokens: [...'hello ghbdtn  '], expected: 'hello привет  ', caret: 14,
     wordUnits: 8, roundTrip: true, roundTrips: 11})),
   {name: 'contenteditable-shift-word', kind: 'contenteditable', text: 'Ghbdtn', typed: true, tokens: [...'Ghbdtn'], expected: 'Привет', caret: 6},
+  ...['input', 'textarea', 'contenteditable'].flatMap(kind => [
+    {name: `${kind}-backspace-empty-word`, kind, text: 'ghbdtn', typed: true,
+      tokens: ['<Backspace>', ...wordTokens], expected: 'привет', caret: 6},
+    {name: `${kind}-erase-word-overrun`, kind, text: 'ghbdtn', typed: true,
+      tokens: [...'old', ...Array(4).fill('<Backspace>'), ...wordTokens], expected: 'привет', caret: 6},
+    {name: `${kind}-uncertain-partial-word`, kind, seed: 'old', text: 'olghbdtn', typed: true,
+      tokens: ['<Backspace>', ...wordTokens], expected: 'olghbdtn', caret: 8, status: 'Stale'},
+    {name: `${kind}-numpad-word`, kind, text: 'ghbdtn1', typed: true,
+      tokens: [...wordTokens, '<Num1>'], expected: 'привет1', caret: 7},
+    {name: `${kind}-digit-word`, kind, text: 'ghbdtn1', typed: true,
+      tokens: [...'ghbdtn1'], expected: 'привет1', caret: 7},
+  ]),
   {name: 'input-backspace-word', kind: 'input', text: 'ghbdtn', typed: true, tokens: [...'ghbdtx', '<Backspace>', 'n'], expected: 'привет', caret: 6},
   ...['input', 'textarea', 'contenteditable'].map(kind => ({name: `${kind}-paste-denied-word`, kind, text: 'ghbdtn',
     typed: true, tokens: wordTokens, preventPaste: true, expected: 'привет', caret: 6})),
@@ -251,6 +270,9 @@ try {
   } else {
   const geometry = await evaluate(`(() => { const r = document.querySelector('#plain').getBoundingClientRect(); return {width:innerWidth,height:innerHeight,x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
   await probe(env, browserPid, ['--activate-own-fixture', '--viewport-width', String(geometry.width), '--viewport-height', String(geometry.height), '--point-x', String(geometry.x), '--point-y', String(geometry.y)]);
+  if(args.includes('--live-app')) {
+    results.push(...await runLiveCases({evaluate,probe,env,browserPid,pause,repeat,filter:option('--live-filter',null)}));
+  } else {
   for (const test of tests) {
   for (let attempt = 1; attempt <= repeat; ++attempt) {
   const seed = test.seed ?? '';
@@ -360,8 +382,10 @@ try {
   results.push(record);
   }
   }
+  }
   const report = {browser: version.product, forcedAccessibility: false, probe: probePath, deadlineMs: deadline, suite,
-    strictFrameCheckPassed: results.every(record => record.noIntermediateFrames), results};
+    mode: args.includes('--live-app') ? 'live-app' : 'text-service',
+    strictFrameCheckPassed: args.includes('--live-app') ? null : results.every(record => record.noIntermediateFrames), results};
   fs.writeFileSync(reportPath, JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify(report, null, 2));
   if (results.some(record => !record.passed)) process.exitCode = 1;

@@ -278,6 +278,49 @@ void FeedRecordedEvents(lshift::RecentTyping& recent, const wchar_t* serialized)
     }
 }
 
+// Только выделенная собственная fixture. Обычный SendInput проходит через
+// Windows и работающий LShift; история здесь не подменяется.
+void SendFixtureEvents(HWND fixture, const wchar_t* serialized) {
+    std::array<bool, 256> held{};
+    const auto send = [](WORD key, bool down) {
+        INPUT input{};
+        input.type = INPUT_KEYBOARD;
+        const UINT scan = MapVirtualKeyW(key, MAPVK_VK_TO_VSC_EX);
+        if(scan == 0) throw std::runtime_error("fixture key has no physical scan code");
+        input.ki.wScan = static_cast<WORD>(scan & 0xFFU);
+        input.ki.dwFlags = KEYEVENTF_SCANCODE | (down ? 0 : KEYEVENTF_KEYUP);
+        if((scan & 0xFF00U) == 0xE000U) input.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+        input.ki.dwExtraInfo = 0x5453544B;
+        if(SendInput(1, &input, sizeof(input)) != 1) throw std::runtime_error("own fixture input rejected");
+    };
+    try {
+        const wchar_t* cursor = serialized;
+        unsigned count = 0;
+        while(*cursor != L'\0') {
+            if(++count > 2048 || *cursor < L'0' || *cursor > L'9') throw std::runtime_error("invalid fixture key stream");
+            wchar_t* end = nullptr;
+            const unsigned long key = std::wcstoul(cursor, &end, 10);
+            if(key > 255 || !lshift::KeyboardChordKey(static_cast<std::uint16_t>(key)) ||
+               *end != L':' || (end[1] != L'0' && end[1] != L'1')) throw std::runtime_error("invalid physical fixture key");
+            const bool down = end[1] == L'1';
+            if((down || !held[key]) && GetForegroundWindow() != fixture)
+                throw std::runtime_error("own fixture lost foreground; input stopped");
+            send(static_cast<WORD>(key), down);
+            held[key] = down;
+            Sleep(12);
+            cursor = end + 2;
+            if(*cursor == L'\0') break;
+            if(*cursor++ != L',' || *cursor == L'\0') throw std::runtime_error("invalid fixture key separator");
+        }
+        for(const bool down : held) if(down) throw std::runtime_error("fixture stream left a key held");
+    } catch(...) {
+        for(WORD key = 0; key < held.size(); ++key) if(held[key]) {
+            try { send(key, false); } catch(...) {}
+        }
+        throw;
+    }
+}
+
 [[nodiscard]] std::uintptr_t RecordedLayout(const wchar_t* value) {
     wchar_t* end = nullptr;
     errno = 0;
@@ -367,6 +410,8 @@ int wmain(int argc, wchar_t** argv) {
         DWORD fixture_pid = 0;
         bool activate = false;
         bool diagnostic_capabilities = false;
+        const wchar_t* send_events = nullptr;
+        bool inspect_layout = false;
         lshift::RecentTyping recent;
         recent.Reset();
         std::uintptr_t recent_layout = 0;
@@ -390,6 +435,8 @@ int wmain(int argc, wchar_t** argv) {
             } else if (argument == L"--activate-own-fixture") activate = true;
             else if (argument == L"--diagnostic-capabilities") diagnostic_capabilities = true;
             else if (argument == L"--recent-events" && index + 1 < argc) FeedRecordedEvents(recent, argv[++index]);
+            else if (argument == L"--send-events" && index + 1 < argc) send_events = argv[++index];
+            else if (argument == L"--inspect-layout") inspect_layout = true;
             else if (argument == L"--recent-layout" && index + 1 < argc) recent_layout = RecordedLayout(argv[++index]);
             else if (argument == L"--set-layout" && index + 1 < argc) set_layout = RecordedLayout(argv[++index]);
             else if (argument == L"--fixture-pid" && index + 1 < argc) {
@@ -421,6 +468,15 @@ int wmain(int argc, wchar_t** argv) {
         }
         if (GetForegroundWindow() != search.window) {
             throw std::runtime_error("unique own fixture must already be foreground; no foreign window was focused");
+        }
+        if(send_events != nullptr) {
+            SendFixtureEvents(search.window, send_events);
+            std::cout << "{\"status\":\"Sent\",\"foreground_ok\":" << (GetForegroundWindow() == search.window ? "true" : "false") << "}\n";
+            return 0;
+        }
+        if(inspect_layout) {
+            std::cout << "{\"status\":\"Observed\",\"layout_after\":" << TargetLayout(search.window) << "}\n";
+            return 0;
         }
         if (set_layout != 0) {
             PrepareLayout(search.window, fixture_pid, set_layout);

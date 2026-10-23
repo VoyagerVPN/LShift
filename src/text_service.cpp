@@ -413,7 +413,8 @@ void ReleaseOwnCopyKeys() noexcept {
 }
 
 [[nodiscard]] TextResult SubmitEdit(const Guard& guard, HWND focus, Direction direction,
-                                  const Layouts& layouts, std::size_t erase_count = 0,
+                                  const Layouts& layouts, const std::function<bool()>& confirm,
+                                  std::size_t erase_count = 0,
                                   std::wstring_view replacement = {}) {
     std::vector<INPUT> keys;
     keys.reserve(erase_count * 2 + replacement.size() * 2 + 4);
@@ -463,6 +464,12 @@ void ReleaseOwnCopyKeys() noexcept {
             return Result(TextStatus::Stale, L"Условия ввода изменились до исправления слова.");
         }
     }
+    // Запрос смены раскладки может обработать накопленный Tab или смену поля.
+    // Общий HWND браузера этого не различает: повторно проверяем сам элемент
+    // и текст уже после смены раскладки, непосредственно перед записью.
+    if (!confirm() || !guard.Current() || !ModifiersUp()) {
+        return Result(TextStatus::Stale, L"Контекст изменился до отправки исправления.");
+    }
     const UINT sent = SendInput(static_cast<UINT>(keys.size()), keys.data(), sizeof(INPUT));
     if (sent != keys.size()) {
         if (sent != 0) {
@@ -504,7 +511,7 @@ void ReleaseOwnCopyKeys() noexcept {
 }
 
 [[nodiscard]] bool DecodeRecent(const RecentKeys& recent, HKL layout, std::wstring& text) {
-    if (!recent.complete || recent.count == 0 || recent.count > recent.keys.size()) return false;
+    if (recent.count == 0 || recent.count > recent.keys.size()) return false;
     text.reserve(recent.count);
     for (std::size_t index = 0; index < recent.count; ++index) {
         const auto& key = recent.keys[index];
@@ -512,6 +519,9 @@ void ReleaseOwnCopyKeys() noexcept {
         BYTE state[256]{};
         if (key.shift) state[VK_SHIFT] = state[VK_LSHIFT] = 0x80;
         state[VK_CAPITAL] = key.caps ? 1 : 0;
+        // VK_NUMPADn уже означает цифру. При Num Lock off Raw Input даёт
+        // навигационный VK; текущее состояние Num Lock не меняет прошлый ввод.
+        if (key.key >= VK_NUMPAD0 && key.key <= VK_NUMPAD9) state[VK_NUMLOCK] = 1;
         wchar_t decoded[8]{};
         const UINT scan = MapVirtualKeyExW(key.key, MAPVK_VK_TO_VSC, layout);
         // Флаг 4 не изменяет системное состояние dead keys; перевод только на worker по жесту.
@@ -529,7 +539,7 @@ void ReleaseOwnCopyKeys() noexcept {
     const auto word = LastWord(prefix, prefix.size());
     if (!word) return Toggle(guard, focus, layouts);
     const auto& recent = guard.request.recent_keys;
-    if (!recent.complete || recent.count == 0) {
+    if (recent.count == 0) {
         TextResult toggled = Toggle(guard, focus, layouts);
         if (toggled.status == TextStatus::Switched) toggled.detail = L"Язык переключён; недавно набранное слово недоступно.";
         return toggled;
@@ -572,7 +582,7 @@ void ReleaseOwnCopyKeys() noexcept {
         return Result(TextStatus::Stale, L"Текст или позиция ввода изменились.");
     }
     touched = true;
-    return SubmitEdit(guard, focus, *direction, layouts, erase_count, replacement);
+    return SubmitEdit(guard, focus, *direction, layouts, confirm, erase_count, replacement);
 }
 
 [[nodiscard]] TextResult ProcessAutomation(const Guard& guard, const Layouts& layouts,
@@ -677,7 +687,8 @@ void ReleaseOwnCopyKeys() noexcept {
         GetClipboardOwner() != guard.request.clipboard_owner || GetClipboardSequenceNumber() != paste_sequence) {
         return Result(TextStatus::Partial, L"Условия вставки изменились; текст не изменён.");
     }
-    return SubmitEdit(guard, focus, *direction, layouts);
+    const auto confirm = [&] { return SameElement(guard, automation.Get(), element.Get(), pid); };
+    return SubmitEdit(guard, focus, *direction, layouts, confirm);
 }
 } // namespace
 

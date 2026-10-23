@@ -6,7 +6,7 @@
 #include <string_view>
 
 namespace lshift {
-enum class DiagnosticEvent { Startup, Reset, Gesture, Result };
+enum class DiagnosticEvent { Startup, Reset, Gesture, Result, FocusHint };
 enum class DiagnosticReason { None, Foreground, Focus, Mouse, Device, OldInput,
     Settings, Journal, Accepted, Busy, HeldKey, OwnWindow, QueueBusy };
 // Только служебные числа. Символы, VK набираемых букв и содержимое clipboard не сохраняются.
@@ -14,6 +14,7 @@ struct DiagnosticRecord {
     DiagnosticEvent event = DiagnosticEvent::Startup;
     DiagnosticReason reason = DiagnosticReason::None;
     std::uint64_t tick = 0;
+    std::uint64_t source_tick = 0;
     std::uint64_t epoch = 0;
     std::uint32_t count = 0;
     std::uint32_t layout = 0;

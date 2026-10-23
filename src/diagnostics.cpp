@@ -26,7 +26,7 @@ bool DiagnosticLog::Append(const DiagnosticRecord& record, std::wstring_view mes
                            std::uint64_t dropped) noexcept {
     try {
         if(path_.empty()) return false;
-        constexpr const char* events[]{"startup", "reset", "gesture", "result"};
+        constexpr const char* events[]{"startup", "reset", "gesture", "result", "focus_hint"};
         constexpr const char* reasons[]{"none", "foreground", "focus", "mouse", "device", "old_input",
             "settings", "journal", "accepted", "busy", "held_key", "own_window", "queue_busy"};
         const auto event = static_cast<std::size_t>(record.event);
@@ -49,8 +49,9 @@ bool DiagnosticLog::Append(const DiagnosticRecord& record, std::wstring_view mes
         if(sprintf_s(timestamp, "%04u-%02u-%02uT%02u:%02u:%02u.%03uZ", utc.wYear, utc.wMonth,
             utc.wDay, utc.wHour, utc.wMinute, utc.wSecond, utc.wMilliseconds) < 0) return false;
         std::ostringstream line;
-        line << "{\"utc\":\"" << timestamp << "\",\"version\":\"0.1.9\",\"event\":\"" << events[event]
+        line << "{\"utc\":\"" << timestamp << "\",\"version\":\"0.1.10\",\"event\":\"" << events[event]
             << "\",\"reason\":\"" << reasons[reason] << "\",\"tick\":" << record.tick
+            << ",\"source_tick\":" << record.source_tick
             << ",\"epoch\":" << record.epoch << ",\"recent_count\":" << record.count
             << ",\"complete\":" << (record.complete ? "true" : "false")
             << ",\"layout\":" << record.layout << ",\"elapsed_ms\":" << record.elapsed

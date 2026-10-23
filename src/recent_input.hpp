@@ -12,7 +12,7 @@ struct RecordedKey {
 struct RecentKeys {
     std::array<RecordedKey, 128> keys{};
     std::size_t count = 0;
-    // false после потери начала: такой snapshot нельзя использовать для удаления текста.
+    // false после потери начала: кандидат требует проверки целого слова по тексту поля.
     bool complete = true;
     // Текущее состояние для отправки замены; может отличаться от Caps у последней буквы.
     bool caps_active = false;
@@ -25,6 +25,9 @@ public:
     [[nodiscard]] RecentKeys Snapshot() const noexcept;
     // Новый контекст задаёт вызывающий код; состояние удерживаемых клавиш и Caps сохраняется.
     void Clear() noexcept;
+    // Уведомление accessibility не доказывает смену поля: сохраняем кандидат,
+    // но его начало больше не считаем подтверждённым без сверки с текстом.
+    void MarkUncertain() noexcept;
 private:
     RecentKeys recent_{};
     std::array<bool, 256> held_{};

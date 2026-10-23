@@ -93,13 +93,14 @@ public:
 private:
     struct Job { lshift::TextRequest request; std::uint64_t epoch = 0; };
     void Trace(lshift::DiagnosticEvent event, lshift::DiagnosticReason reason,
-               std::uint32_t data = 0) noexcept {
+               std::uint32_t data = 0, std::uint64_t source_tick = 0) noexcept {
 #if LSHIFT_DIAGNOSTICS
         const auto recent = recent_.Snapshot();
         lshift::DiagnosticRecord record;
         record.event = event;
         record.reason = reason;
         record.tick = GetTickCount64();
+        record.source_tick = source_tick;
         record.epoch = generation_.load();
         record.count = static_cast<std::uint32_t>(recent.count);
         record.complete = recent.complete;
@@ -110,6 +111,7 @@ private:
         (void)event;
         (void)reason;
         (void)data;
+        (void)source_tick;
 #endif
     }
 #if LSHIFT_DIAGNOSTICS
@@ -143,22 +145,30 @@ private:
                                      LONG object, LONG child, DWORD, DWORD time) noexcept {
         auto* app = event_app_;
         if(!app || app->stopping_.load()) return;
-        if(event == EVENT_OBJECT_FOCUS && (!window ||
-            GetAncestor(window, GA_ROOT) != GetForegroundWindow())) return;
-        (void)object;
         (void)child;
-        // Любое уведомление фокуса отменяет команду, даже если native HWND тот же.
-        // Старое уведомление не стирает набор, появившийся уже после смены поля.
-        app->generation_.fetch_add(1);
-        if(static_cast<LONG>(time - app->last_edit_time_) >= 0) {
-#if LSHIFT_DIAGNOSTICS
-            if(app->recent_.Snapshot().count != 0 || app->busy_.load())
-                app->Trace(lshift::DiagnosticEvent::Reset,
-                    event == EVENT_SYSTEM_FOREGROUND ? lshift::DiagnosticReason::Foreground :
-                        lshift::DiagnosticReason::Focus, static_cast<std::uint32_t>(object));
-#endif
-            app->recent_.Clear();
+        const HWND foreground = GetForegroundWindow();
+        if(event == EVENT_OBJECT_FOCUS) {
+            if(!window || GetAncestor(window, GA_ROOT) != foreground) return;
+            // Подключение accessibility тоже повторно объявляет прежний фокус.
+            // Это подсказка для проверки, а не доказательство смены поля.
+            // Native HWND и идентичность UIA-элемента проверяются перед записью;
+            // клавиатура и кнопки мыши независимо отменяют устаревшую команду.
+            app->Trace(lshift::DiagnosticEvent::FocusHint, lshift::DiagnosticReason::Focus,
+                       static_cast<std::uint32_t>(object), time);
+            app->recent_.MarkUncertain();
+            return;
         }
+        // WinEvent доставляется асинхронно: уведомление о прежнем foreground
+        // не должно стирать набор, уже начавшийся в текущем окне.
+        if(event != EVENT_SYSTEM_FOREGROUND || window != foreground ||
+           static_cast<LONG>(time - app->last_edit_time_) < 0) return;
+        app->generation_.fetch_add(1);
+#if LSHIFT_DIAGNOSTICS
+        if(app->recent_.Snapshot().count != 0 || app->busy_.load())
+            app->Trace(lshift::DiagnosticEvent::Reset,lshift::DiagnosticReason::Foreground,
+                       static_cast<std::uint32_t>(object), time);
+#endif
+        app->recent_.Clear();
     }
     void Invalidate() noexcept {
         Trace(lshift::DiagnosticEvent::Reset, lshift::DiagnosticReason::Settings);

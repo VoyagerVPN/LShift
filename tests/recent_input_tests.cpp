@@ -64,8 +64,8 @@ int main() {
         Tap(typing, 0x1B);
         Tap(typing, 0x08);
         Tap(typing, 0x47);
-        Require(!typing.Snapshot().complete && typing.Snapshot().count == 0,
-            "Escape cancels select-all recovery instead of trusting a later deletion");
+        Require(!typing.Snapshot().complete && typing.Snapshot().count == 1,
+            "Escape cancels select-all certainty but preserves a later candidate for field validation");
         std::cout << "PASS select-all replacement, repeated delete and cancelled selection\n";
         typing.Reset();
         for(const auto key : {0x47, 0x48, 0x42, 0x44, 0x54, 0x4E})
@@ -113,9 +113,9 @@ int main() {
                 "Reset clears held modifiers and resets Caps seed");
         std::cout << "PASS per-key Shift, Caps repeat, Clear and Reset\n";
 
-        for(const auto invalidating_key : {0x09, 0x0D, 0x1B, 0x21, 0x22, 0x23, 0x24,
+        for(const auto invalidating_key : {0x09, 0x0D, 0x21, 0x22, 0x23, 0x24,
                                            0x25, 0x26, 0x27, 0x28, 0x2D, 0x2E,
-                                           0x60, 0x6B, 0x70, 0xDF, 0xE5, 0xE7, 0xFFFF}) {
+                                           0xDF, 0xE5, 0xE7, 0xFFFF}) {
             typing.Reset();
             Tap(typing, 0x41);
             Tap(typing, static_cast<std::uint16_t>(invalidating_key));
@@ -148,6 +148,23 @@ int main() {
         std::cout << "PASS context invalidation and shortcut guards\n";
 
         typing.Reset();
+        Tap(typing,0x47);
+        typing.MarkUncertain();
+        Tap(typing,0x48);
+        Require(!typing.Snapshot().complete && typing.Snapshot().count == 2 &&
+                typing.Snapshot().keys[0].key == 0x47,
+                "an accessibility focus hint preserves a candidate until actual field validation");
+
+        typing.Reset();
+        Tap(typing, 0x47);
+        Tap(typing, 0xA2);
+        Require(typing.Snapshot().count == 1,
+                "a modifier tap without a shortcut does not discard the typed word");
+        Tap(typing, 0x1B);
+        Require(typing.Snapshot().count == 1,
+                "a non-editing Escape command leaves the candidate word for field validation");
+
+        typing.Reset();
         for(const auto printable : {0x30, 0x39, 0x41, 0x5A, 0x20, 0xBA, 0xBB, 0xBC,
                                     0xBD, 0xBE, 0xBF, 0xC0, 0xDB, 0xDC, 0xDD, 0xDE, 0xE2})
             Tap(typing, static_cast<std::uint16_t>(printable));
@@ -164,6 +181,32 @@ int main() {
         std::cout << "PASS printable OEM range and key repeat\n";
 
         typing.Reset();
+        for(unsigned index=0;index<25;++index) {
+            for(const auto key:{0x57,0x4F,0x52,0x44,0x20})Tap(typing,static_cast<std::uint16_t>(key));
+        }
+        for(const auto key:{0x47,0x48,0x42,0x44,0x54,0x4E})Tap(typing,static_cast<std::uint16_t>(key));
+        Require(typing.Snapshot().count == 128 && !typing.Snapshot().complete &&
+                typing.Snapshot().keys[122].key == 0x47 && typing.Snapshot().keys[127].key == 0x4E,
+                "bounded history retains the whole last word when a long paragraph crosses capacity");
+        Tap(typing,0x20);
+        Require(typing.Snapshot().count == 128 && typing.Snapshot().keys[121].key == 0x47 &&
+                typing.Snapshot().keys[127].key == 0x20,
+                "a trailing space does not discard a word at the history capacity boundary");
+
+        typing.Reset();
+        Tap(typing, 0x08);
+        Tap(typing, 0x47);
+        Tap(typing, 0x48);
+        Require(!typing.Snapshot().complete && typing.Snapshot().count == 2,
+                "typing after an unknown deletion remains available for actual-field validation");
+
+        typing.Reset();
+        Tap(typing, 0x47);
+        Tap(typing, 0x61);
+        Require(typing.Snapshot().count == 2 && typing.Snapshot().keys[1].key == 0x61,
+                "a numeric keypad digit preserves the preceding typed word");
+
+        typing.Reset();
         for(const auto key : {0x41, 0x42, 0x20, 0x20}) Tap(typing, static_cast<std::uint16_t>(key));
         Tap(typing, 0x08);
         const auto trailing = typing.Snapshot();
@@ -176,17 +219,17 @@ int main() {
                 "deleting exactly the recorded input leaves a complete empty snapshot");
         Tap(typing, 0x08);
         Tap(typing, 0x43);
-        Require(!typing.Snapshot().complete && typing.Snapshot().count == 0,
-                "Backspace before the recorded start prevents a misleading partial word");
+        Require(!typing.Snapshot().complete && typing.Snapshot().count == 1,
+                "Backspace before the recorded start marks a later candidate as uncertain");
         Tap(typing, 0x25);
         Tap(typing, 0x44);
-        Require(!typing.Snapshot().complete && typing.Snapshot().count == 0,
-                "navigation does not make missing history complete again");
+        Require(!typing.Snapshot().complete && typing.Snapshot().count == 1,
+                "navigation does not make a new candidate a complete history");
         Tap(typing, 0x20);
         Tap(typing, 0x45);
         const auto recovered = typing.Snapshot();
-        Require(recovered.complete && recovered.count == 2 && recovered.keys[0].key == 0x20 &&
-                recovered.keys[1].key == 0x45, "a space establishes a safe new boundary after lost history");
+        Require(!recovered.complete && recovered.count == 3 && recovered.keys[1].key == 0x20 &&
+                recovered.keys[2].key == 0x45, "a word after a space is retained for whole-word validation");
         std::cout << "PASS Backspace, trailing spaces and incomplete history recovery\n";
 
         typing.Reset();
@@ -194,14 +237,15 @@ int main() {
         Require(typing.Snapshot().complete && typing.Snapshot().count == 128,
                 "the full 128-key capacity is usable");
         Tap(typing, 0x42);
-        Require(!typing.Snapshot().complete && typing.Snapshot().count == 0,
-                "overflow discards the word instead of exposing a truncated suffix");
+        Require(!typing.Snapshot().complete && typing.Snapshot().count == 128 &&
+                typing.Snapshot().keys[127].key == 0x42,
+                "overflow retains a bounded uncertain suffix requiring whole-word validation");
         Tap(typing, 0xA2);
         Tap(typing, 0x70);
         Tap(typing, 0x08);
         Tap(typing, 0x43);
-        Require(!typing.Snapshot().complete && typing.Snapshot().count == 0,
-                "overflow remains incomplete through modifiers, unsupported keys and deletion");
+        Require(!typing.Snapshot().complete && typing.Snapshot().count == 128,
+                "overflow remains uncertain while a later candidate can be validated by the field");
         Tap(typing, 0x0D);
         Tap(typing, 0x44);
         Require(typing.Snapshot().complete && typing.Snapshot().count == 1 &&
