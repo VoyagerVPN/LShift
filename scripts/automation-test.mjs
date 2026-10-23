@@ -70,6 +70,13 @@ const longRussian = 'привет '.repeat(585) + 'п';
 const selectionCase = (name, kind, original, converted) => ({name, kind, text: `KEEP ${original} TAIL`,
   start: 5, end: 5 + original.length, expected: `KEEP ${converted} TAIL`, caret: 5 + converted.length});
 const cases = [
+  {name: 'input-combobox-word', kind: 'input', inputRole: 'combobox', text: 'ghbdtn', typed: true,
+    tokens: wordTokens, expected: 'привет', caret: 6, roundTrip: true},
+  {...selectionCase('input-combobox-selection', 'input', 'ghbdtn', 'привет'), inputRole: 'combobox'},
+  {name: 'input-combobox-readonly', kind: 'input', inputRole: 'combobox', readOnly: true,
+    text: 'ghbdtn', start: 0, end: 6, expected: 'ghbdtn', expectedStart: 0, caret: 6, status: 'Unsupported'},
+  {name: 'input-combobox-password', kind: 'input', inputRole: 'combobox', password: true,
+    text: 'ghbdtn', start: 0, end: 6, expected: 'ghbdtn', expectedStart: 0, caret: 6, status: 'Unsupported'},
   {name: 'input-lastword', kind: 'input', text: 'ghbdtn', typed: true, tokens: wordTokens, expected: 'привет', caret: 6},
   {name: 'textarea-trailing-spaces', kind: 'textarea', text: 'ghbdtn   ', typed: true, tokens: [...'ghbdtn   '], expected: 'привет   ', caret: 9},
   {name: 'contenteditable-lastword', kind: 'contenteditable', text: 'ghbdtn', typed: true, tokens: wordTokens, expected: 'привет', caret: 6},

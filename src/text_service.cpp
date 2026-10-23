@@ -326,14 +326,14 @@ struct NativeState {
 [[nodiscard]] bool EditableElement(IUIAutomationElement* element, DWORD expected_pid) noexcept {
     BOOL enabled = FALSE, password = TRUE, focused = FALSE;
     int process = 0;
-    CONTROLTYPEID type = 0;
+    // Роль элемента не определяет его текстовые возможности: редактируемый
+    // ComboBox или другой составной контрол тоже может предоставлять TextPattern.
+    // Наличие диапазона и его IsReadOnly проверяются отдельно до любых записей.
     return SUCCEEDED(element->get_CurrentProcessId(&process)) &&
         process > 0 && static_cast<DWORD>(process) == expected_pid &&
         SUCCEEDED(element->get_CurrentIsEnabled(&enabled)) && enabled &&
         SUCCEEDED(element->get_CurrentIsPassword(&password)) && !password &&
-        SUCCEEDED(element->get_CurrentHasKeyboardFocus(&focused)) && focused &&
-        SUCCEEDED(element->get_CurrentControlType(&type)) &&
-        (type == UIA_EditControlTypeId || type == UIA_DocumentControlTypeId);
+        SUCCEEDED(element->get_CurrentHasKeyboardFocus(&focused)) && focused;
 }
 
 [[nodiscard]] bool SameElement(const Guard& guard, IUIAutomation* automation,

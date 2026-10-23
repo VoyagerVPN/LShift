@@ -1,7 +1,11 @@
 // Проверки работающего приложения: настоящий SendInput -> Raw Input -> worker -> поле.
 // CDP используется только для подготовки собственного редактора и чтения результата.
 export async function runLiveCases({evaluate, probe, env, browserPid, pause, repeat = 1, filter = null}) {
-  const cases = ['input', 'textarea', 'contenteditable'].flatMap(kind => [
+  const cases = [
+    {kind:'input', name:'combobox-word', inputRole:'combobox', tokens:[...'ghbdtn'], expected:'привет', roundTrip:true},
+    {kind:'input', name:'combobox-selection', inputRole:'combobox', tokens:[...'ghbdtn','<Ctrl+A>'], selected:true, before:'ghbdtn', expected:'привет'},
+    {kind:'input', name:'combobox-digit', inputRole:'combobox', tokens:[...'ghbdtn','<Num1>'], before:'ghbdtn1', expected:'привет1'},
+    ...['input', 'textarea', 'contenteditable'].flatMap(kind => [
     {kind, name:'plain', tokens:[...'ghbdtn'], expected:'привет', roundTrip:true},
     {kind, name:'backspace-empty', tokens:['<Backspace>',...'ghbdtn'], expected:'привет'},
     {kind, name:'erase-overrun', tokens:[...'old',...Array(4).fill('<Backspace>'),...'ghbdtn'], expected:'привет'},
@@ -24,7 +28,7 @@ export async function runLiveCases({evaluate, probe, env, browserPid, pause, rep
     {kind, name:'uncertain-partial-guard', seed:'old', tokens:['<Backspace>',...'ghbdtn'], before:'olghbdtn', expected:'olghbdtn', unchanged:true},
     {kind, name:'fast-focus-type', tokens:[...'ghbdtn'], focusDelay:0, expected:'привет'},
     {kind, name:'focus-during-command', tokens:[...'ghbdtn'], cancelWithTab:true},
-  ]);
+  ])];
   const simple = {'<Backspace>':8,'<Delete>':46,'<Escape>':27,'<Tab>':9,'<Left>':37,'<Right>':39};
   const stroke = vk => [[vk,1],[vk,0]];
   const events = tokens => tokens.flatMap(token => {
@@ -46,7 +50,7 @@ export async function runLiveCases({evaluate, probe, env, browserPid, pause, rep
   };
   const results = [];
   for(const test of cases.filter(item=>filter===null||`${item.kind}/${item.name}`.includes(filter))) for(let attempt=1;attempt<=repeat;++attempt) {
-    const initial={kind:test.kind,text:test.seed??''};
+    const initial={kind:test.kind,text:test.seed??'',inputRole:test.inputRole??null};
     await evaluate(`window.lshiftFixture.reset(${JSON.stringify(initial)})`);
     await activate(test.kind);
     await evaluate(`window.lshiftFixture.reset(${JSON.stringify(initial)})`);

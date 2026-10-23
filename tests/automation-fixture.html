@@ -106,7 +106,7 @@
   window.lshiftFixture = {
     reset({kind, text, start = text.length, end = start, password = false, readOnly = false,
       preventPaste: denyPaste = false, autoPair: pair = false, surroundingText = false,
-      preventSelectAll: denySelectAll = false}) {
+      preventSelectAll: denySelectAll = false, inputRole = null}) {
       observation.running = false;
       active = fields[kind];
       preventPaste = denyPaste;
@@ -117,6 +117,8 @@
       if (!active) throw new Error('unknown fixture field');
       fields.input.type = password ? 'password' : 'text';
       fields.input.readOnly = readOnly;
+      if (inputRole === null) fields.input.removeAttribute('role');
+      else fields.input.setAttribute('role', inputRole);
       if (active.isContentEditable) active.textContent = text;
       else active.value = text;
       active.scrollIntoView({block: 'center'});
