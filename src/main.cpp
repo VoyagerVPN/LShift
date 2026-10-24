@@ -20,6 +20,7 @@ constexpr UINT kResultMessage = WM_APP + 20;
 constexpr UINT kShowTrayMenu = WM_APP + 21;
 constexpr UINT kWorkerStopped = WM_APP + 22;
 constexpr UINT_PTR kSmokeTimer = 90;
+constexpr UINT_PTR kTrayRetryTimer = 91;
 
 struct OwnedIcon {
     HICON value = nullptr;
@@ -69,8 +70,8 @@ public:
             nullptr, ContextEvent, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
         focus_hook_ = SetWinEventHook(EVENT_OBJECT_FOCUS, EVENT_OBJECT_FOCUS,
             nullptr, ContextEvent, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
-        tray_added_ = lshift::AddTray(window_, Icon(), settings_.enabled);
-        if(!raw_registered_ || !tray_added_ || !foreground_hook_ || !focus_hook_) return false;
+        if(!raw_registered_ || !foreground_hook_ || !focus_hook_ || !taskbar_created_) return false;
+        if(!RegisterTray()) return false;
         SeedHeldKeys();
         worker_ = std::jthread([this](std::stop_token stop) { Worker(stop); });
         if(!smoke_path_.empty()) SetTimer(window_, kSmokeTimer, 1000, nullptr);
@@ -91,6 +92,16 @@ public:
         return status == -1 ? 1 : 0;
     }
 private:
+    [[nodiscard]] bool RegisterTray() {
+        tray_added_ = lshift::AddTray(window_, Icon(), settings_.enabled);
+        if(tray_added_) {
+            KillTimer(window_, kTrayRetryTimer);
+            return true;
+        }
+        // Explorer при входе может ещё не принимать значки. Работа ввода
+        // продолжается; таймер нужен только до успешной регистрации трея.
+        return SetTimer(window_, kTrayRetryTimer, 1000, nullptr) != 0;
+    }
     struct Job { lshift::TextRequest request; std::uint64_t epoch = 0; };
     void Trace(lshift::DiagnosticEvent event, lshift::DiagnosticReason reason,
                std::uint32_t data = 0, std::uint64_t source_tick = 0) noexcept {
@@ -347,6 +358,7 @@ private:
     }
     void BeginStop() {
         if(stopping_.exchange(true)) return;
+        KillTimer(window_, kTrayRetryTimer);
         generation_.fetch_add(1);
         worker_.request_stop();
         wake_.notify_all();
@@ -395,6 +407,7 @@ private:
         std::ofstream out(smoke_path_);
         out << "{\"raw_input_registered\":" << (raw_registered_ ? "true" : "false")
             << ",\"tray_registered\":" << (tray_added_ ? "true" : "false")
+            << ",\"tray_retry_pending\":" << (!tray_added_ ? "true" : "false")
             << ",\"worker_initialized\":" << (worker_started_.load() ? "true" : "false")
             << ",\"com_initialized\":" << (com_initialized_.load() ? "true" : "false")
             << ",\"diagnostics_enabled\":" << (LSHIFT_DIAGNOSTICS ? "true" : "false")
@@ -402,7 +415,7 @@ private:
     }
     LRESULT Handle(UINT message, WPARAM wparam, LPARAM lparam) {
         if(taskbar_created_ && message == taskbar_created_) {
-            tray_added_ = lshift::AddTray(window_, Icon(), settings_.enabled);
+            if(!stopping_.load()) (void)RegisterTray();
             return 0;
         }
         switch(message) {
@@ -442,6 +455,7 @@ private:
         }
         case WM_TIMER:
             if(wparam == kSmokeTimer) { KillTimer(window_, kSmokeTimer); SmokeReport(); BeginStop(); }
+            else if(wparam == kTrayRetryTimer && !stopping_.load()) (void)RegisterTray();
             return 0;
         case WM_CLOSE: BeginStop(); return 0;
         case kWorkerStopped:

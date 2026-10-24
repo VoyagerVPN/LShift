@@ -49,7 +49,7 @@ bool DiagnosticLog::Append(const DiagnosticRecord& record, std::wstring_view mes
         if(sprintf_s(timestamp, "%04u-%02u-%02uT%02u:%02u:%02u.%03uZ", utc.wYear, utc.wMonth,
             utc.wDay, utc.wHour, utc.wMinute, utc.wSecond, utc.wMilliseconds) < 0) return false;
         std::ostringstream line;
-        line << "{\"utc\":\"" << timestamp << "\",\"version\":\"0.1.11\",\"event\":\"" << events[event]
+        line << "{\"utc\":\"" << timestamp << "\",\"version\":\"0.1.12\",\"event\":\"" << events[event]
             << "\",\"reason\":\"" << reasons[reason] << "\",\"tick\":" << record.tick
             << ",\"source_tick\":" << record.source_tick
             << ",\"epoch\":" << record.epoch << ",\"recent_count\":" << record.count
