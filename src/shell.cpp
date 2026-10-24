@@ -452,7 +452,9 @@ bool AddTray(HWND window, HICON icon, bool enabled) {
     if (!window || !icon) return false;
     auto data = TrayData(window);
     SetTrayContents(data, icon, enabled);
-    if (!Shell_NotifyIconW(NIM_ADD, &data)) return false;
+    // Повторное TaskbarCreated не всегда означает удаление прежнего значка.
+    // Если он уже существует, обновляем тот же GUID вместо вечных повторов ADD.
+    if (!Shell_NotifyIconW(NIM_ADD, &data) && !Shell_NotifyIconW(NIM_MODIFY, &data)) return false;
     data.uVersion = NOTIFYICON_VERSION_4;
     if (Shell_NotifyIconW(NIM_SETVERSION, &data)) {
         registered_tray_window = window;

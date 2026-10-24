@@ -129,6 +129,7 @@ int wmain(int count, wchar_t** arguments) {
         Require(GetExitCodeProcess(child.info.hProcess, &exit_code) && exit_code == 0, "smoke child exits normally");
         std::ifstream input(report);
         const std::string result((std::istreambuf_iterator<char>(input)), {});
+        std::cout << "smoke=" << result << '\n';
         Require(result.find("\"raw_input_registered\":true") != std::string::npos, "Raw Input initialized");
         Require(result.find("\"worker_initialized\":true") != std::string::npos, "worker initialized");
         Require(result.find("\"gesture_actions_disabled\":true") != std::string::npos, "test child cannot edit user text");
