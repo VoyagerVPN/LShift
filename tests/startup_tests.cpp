@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <shellapi.h>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -47,6 +48,38 @@ BOOL CALLBACK FindMain(HWND window, LPARAM parameter) {
        std::wstring_view(name) == L"LShift.Main.1") search.result = window;
     return TRUE;
 }
+bool NotificationServiceAvailable() {
+    // Окно панели может существовать и в неинтерактивной CI-сессии.
+    // Проверяем независимый значок до запуска приложения, иначе пропуск
+    // мог бы скрыть дефект самого LShift.
+    const wchar_t* name = L"LShift.Startup.NotificationProbe";
+    WNDCLASSW type{};
+    type.lpfnWndProc = DefWindowProcW;
+    type.hInstance = GetModuleHandleW(nullptr);
+    type.lpszClassName = name;
+    Require(RegisterClassW(&type) != 0, "register own notification probe class");
+    const HWND window = CreateWindowExW(WS_EX_TOOLWINDOW, name, name, WS_OVERLAPPED,
+        0, 0, 0, 0, nullptr, nullptr, type.hInstance, nullptr);
+    Require(window != nullptr, "create hidden notification probe window");
+    NOTIFYICONDATAW icon{};
+    icon.cbSize = sizeof(icon);
+    icon.hWnd = window;
+    icon.uFlags = NIF_GUID | NIF_ICON | NIF_MESSAGE;
+    icon.guidItem = {0x8d4c2871, 0xa113, 0x4d91, {0x82, 0x31, 0x75, 0x01, 0, 0, 0, 0}};
+    const DWORD pid = GetCurrentProcessId();
+    for(unsigned i = 0; i < 4; ++i) icon.guidItem.Data4[4 + i] = static_cast<BYTE>(pid >> (i * 8));
+    icon.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    icon.uCallbackMessage = WM_APP + 1;
+    bool available = Shell_NotifyIconW(NIM_ADD, &icon) != FALSE;
+    if(available) {
+        icon.uVersion = NOTIFYICON_VERSION_4;
+        available = Shell_NotifyIconW(NIM_SETVERSION, &icon) != FALSE;
+        Shell_NotifyIconW(NIM_DELETE, &icon);
+    }
+    DestroyWindow(window);
+    UnregisterClassW(name, type.hInstance);
+    return available;
+}
 }
 
 int wmain(int count, wchar_t** arguments) {
@@ -61,6 +94,10 @@ int wmain(int count, wchar_t** arguments) {
         const HWND shell = FindWindowW(L"Shell_TrayWnd", nullptr);
         if(no_shell) Require(shell == nullptr, "private desktop must have no Explorer taskbar");
         else if(!shell) { std::cout << "SKIP: no interactive shell for reannouncement\n"; return 77; }
+        else if(!NotificationServiceAvailable()) {
+            std::cout << "SKIP: independent notification probe is unavailable in this session\n";
+            return 77;
+        }
 
         const auto directory = std::filesystem::absolute(L".cache") /
             (L"startup-tests-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()));

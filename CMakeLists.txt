@@ -39,7 +39,7 @@ if(LSHIFT_BUILD_APP)
   add_test(NAME settings COMMAND shell_tests)
   set_tests_properties(settings PROPERTIES WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
   add_executable(startup_tests tests/startup_tests.cpp)
-  target_link_libraries(startup_tests PRIVATE user32)
+  target_link_libraries(startup_tests PRIVATE user32 shell32)
   add_test(NAME startup_no_shell COMMAND startup_tests $<TARGET_FILE:LShift> --no-shell)
   add_test(NAME startup_reannounce COMMAND startup_tests $<TARGET_FILE:LShift> --reannounce)
   set_tests_properties(startup_no_shell startup_reannounce PROPERTIES
