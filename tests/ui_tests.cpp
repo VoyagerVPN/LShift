@@ -378,6 +378,16 @@ int wmain(int argc, wchar_t** argv) {
         const lshift::Settings values{true, 475, 200};
         fixture.Open(values);
         CheckControls(fixture.Window(), values, autostart);
+        const HWND enabled = GetDlgItem(fixture.Window(), EnabledControl);
+        const HWND startup = GetDlgItem(fixture.Window(), AutostartControl);
+        for (const HWND checkbox : {enabled, startup}) {
+            const LRESULT before = SendMessageW(checkbox, BM_GETCHECK, 0, 0);
+            SendMessageW(checkbox, BM_CLICK, 0, 0);
+            Require(SendMessageW(checkbox, BM_GETCHECK, 0, 0) != before, "styled switch toggles on click");
+            SendMessageW(checkbox, BM_CLICK, 0, 0);
+            Require(SendMessageW(checkbox, BM_GETCHECK, 0, 0) == before, "styled switch toggles back");
+        }
+        RedrawWindow(fixture.Window(), nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
         std::cout << "PASS: settings controls, supplied values, Save and Cancel are present\n";
         CaptureClient(fixture.Window(), output);
         const HWND closed = fixture.Window();

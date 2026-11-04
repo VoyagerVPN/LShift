@@ -41,8 +41,8 @@ const images = sizes.map(size => {
         if (letter || arrow) ++whiteSamples;
       }
       const index = (y * size + x) * 4;
-      for (const [channel, background] of [36, 94, 115].entries())
-        rgba[index + channel] = insideSamples ? Math.round((255 * whiteSamples + background * (insideSamples - whiteSamples)) / insideSamples) : 0;
+      for (const [channel, background] of [28, 28, 28].entries())
+        rgba[index + channel] = insideSamples ? Math.round((235 * whiteSamples + background * (insideSamples - whiteSamples)) / insideSamples) : 0;
       rgba[index + 3] = Math.round(255 * insideSamples / 16);
     }
     return png(size, rgba);
@@ -61,7 +61,7 @@ const images = sizes.map(size => {
                    (px >= 7 && px <= 19 && py >= 21 && py <= 24);
     const arrow = (px >= 16 && px <= 26 && py >= 12 && py <= 14) ||
                   (px >= 22 && px <= 26 && (py === 13 - (26 - px) || py === 13 + (26 - px)));
-    const color = inside ? (letter || arrow ? 0xFFFFFFFF : 0xFF245E73) : 0;
+    const color = inside ? (letter || arrow ? 0xFFEBEBEB : 0xFF1C1C1C) : 0;
     bitmap.writeUInt32LE(color >>> 0, 40 + ((size - 1 - y) * size + x) * 4);
     if (!inside) bitmap[40 + size * size * 4 + (size - 1 - y) * maskRow + Math.floor(x / 8)] |= 0x80 >> (x % 8);
   }

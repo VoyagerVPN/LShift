@@ -1,6 +1,8 @@
 #include "shell.hpp"
 
 #include <shellapi.h>
+#include <commctrl.h>
+#include <dwmapi.h>
 #include <array>
 #include <memory>
 #include <string_view>
@@ -21,6 +23,13 @@ constexpr UINT kMinInterval = 150;
 constexpr UINT kMaxInterval = 800;
 constexpr UINT kMinHold = 100;
 constexpr UINT kMaxHold = 500;
+constexpr COLORREF kSurface = RGB(28, 28, 28);
+constexpr COLORREF kRaised = RGB(38, 38, 38);
+constexpr COLORREF kHover = RGB(51, 51, 51);
+constexpr COLORREF kLine = RGB(59, 59, 59);
+constexpr COLORREF kInk = RGB(235, 235, 232);
+constexpr COLORREF kMuted = RGB(172, 172, 168);
+constexpr COLORREF kAccent = RGB(220, 220, 213);
 HWND settings_window = nullptr;
 HWND registered_tray_window = nullptr;
 bool tray_menu_active = false;
@@ -149,8 +158,10 @@ struct SettingsWindow {
     bool owned_by_window = false;
     UINT dpi = USER_DEFAULT_SCREEN_DPI;
     HFONT font = nullptr;
+    HBRUSH surface = CreateSolidBrush(kSurface);
+    HBRUSH raised = CreateSolidBrush(kRaised);
     std::array<HWND, 9> controls{};
-    ~SettingsWindow() { if (font) DeleteObject(font); }
+    ~SettingsWindow() { if (font) DeleteObject(font); if (surface) DeleteObject(surface); if (raised) DeleteObject(raised); }
 };
 
 [[nodiscard]] int Scaled(const SettingsWindow& state, int value) noexcept {
@@ -174,15 +185,54 @@ void SetWindowFont(SettingsWindow& state) {
 
 void PositionControls(SettingsWindow& state) {
     constexpr std::array<std::array<int, 4>, 9> rectangles{{
-        {20, 18, 410, 24}, {20, 61, 315, 22}, {350, 57, 80, 27},
-        {20, 105, 320, 38}, {350, 106, 80, 27}, {20, 158, 410, 24},
-        {20, 197, 410, 38}, {240, 252, 90, 29}, {340, 252, 90, 29}
+        {24, 60, 402, 32}, {24, 117, 305, 22}, {346, 113, 80, 27},
+        {24, 162, 305, 38}, {346, 162, 80, 27}, {24, 219, 402, 32},
+        {24, 270, 402, 38}, {226, 329, 96, 34}, {330, 329, 96, 34}
     }};
     for (std::size_t index = 0; index < state.controls.size(); ++index) {
         const auto& rectangle = rectangles[index];
         MoveWindow(state.controls[index], Scaled(state, rectangle[0]), Scaled(state, rectangle[1]),
                    Scaled(state, rectangle[2]), Scaled(state, rectangle[3]), TRUE);
     }
+}
+
+LRESULT CALLBACK CheckPaint(HWND control, UINT message, WPARAM wparam, LPARAM lparam,
+                            UINT_PTR, DWORD_PTR) {
+    if (message == WM_PAINT) {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(control, &paint);
+        RECT rect{}; GetClientRect(control, &rect);
+        HBRUSH background = CreateSolidBrush(kSurface);
+        FillRect(dc, &rect, background); DeleteObject(background);
+        const int dpi = static_cast<int>(GetDpiForWindow(control));
+        const int boxWidth = MulDiv(32, dpi, 96), boxHeight = MulDiv(18, dpi, 96);
+        RECT box{rect.right - boxWidth, (rect.bottom - boxHeight) / 2,
+                 rect.right, (rect.bottom + boxHeight) / 2};
+        const bool checked = SendMessageW(control, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        HBRUSH track = CreateSolidBrush(checked ? kAccent : kLine);
+        FillRect(dc, &box, track); DeleteObject(track);
+        const int inset = MulDiv(4, dpi, 96), knob = MulDiv(10, dpi, 96);
+        RECT dot{checked ? box.right - inset - knob : box.left + inset, box.top + inset,
+                 checked ? box.right - inset : box.left + inset + knob, box.top + inset + knob};
+        HBRUSH thumb = CreateSolidBrush(checked ? kSurface : kMuted);
+        FillRect(dc, &dot, thumb); DeleteObject(thumb);
+        wchar_t label[256]{}; GetWindowTextW(control, label, static_cast<int>(std::size(label)));
+        SelectObject(dc, reinterpret_cast<HFONT>(SendMessageW(control, WM_GETFONT, 0, 0)));
+        SetTextColor(dc, kInk); SetBkMode(dc, TRANSPARENT);
+        rect.right = box.left - MulDiv(12, dpi, 96);
+        DrawTextW(dc, label, -1, &rect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        if (GetFocus() == control && !(SendMessageW(control, WM_QUERYUISTATE, 0, 0) & UISF_HIDEFOCUS)) {
+            DrawFocusRect(dc, &rect);
+        }
+        EndPaint(control, &paint);
+        return 0;
+    }
+    if (message == WM_NCDESTROY) RemoveWindowSubclass(control, CheckPaint, 1);
+    const LRESULT result = DefSubclassProc(control, message, wparam, lparam);
+    if (message == BM_SETCHECK || message == WM_ENABLE || message == WM_SETFOCUS ||
+        message == WM_KILLFOCUS || message == WM_LBUTTONUP || message == WM_KEYUP)
+        InvalidateRect(control, nullptr, FALSE);
+    return result;
 }
 
 [[nodiscard]] HWND MakeControl(HWND parent, DWORD extended_style, const wchar_t* type,
@@ -205,20 +255,25 @@ void FillSettings(HWND window, const Settings& settings) {
         MakeControl(window, 0, L"BUTTON", L"Включить двойной левый Shift",
                     BS_AUTOCHECKBOX | WS_TABSTOP, kEnabledControl),
         MakeControl(window, 0, L"STATIC", L"Интервал между нажатиями, мс (150–800)", 0, -1),
-        MakeControl(window, WS_EX_CLIENTEDGE, L"EDIT", L"",
+        MakeControl(window, 0, L"EDIT", L"",
                     ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP, kIntervalControl),
         MakeControl(window, 0, L"STATIC", L"Максимальная длительность нажатия, мс\n(100–500)", 0, -1),
-        MakeControl(window, WS_EX_CLIENTEDGE, L"EDIT", L"",
+        MakeControl(window, 0, L"EDIT", L"",
                     ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP, kHoldControl),
         MakeControl(window, 0, L"BUTTON", L"Запускать LShift при входе в Windows",
                     BS_AUTOCHECKBOX | WS_TABSTOP, kAutostartControl),
         MakeControl(window, 0, L"STATIC",
                     L"Исправляет последнее слово или выделение\nв доступном текстовом поле.", 0, -1),
-        MakeControl(window, 0, L"BUTTON", L"Сохранить", BS_DEFPUSHBUTTON | WS_TABSTOP, IDOK),
-        MakeControl(window, 0, L"BUTTON", L"Отмена", BS_PUSHBUTTON | WS_TABSTOP, IDCANCEL)
+        MakeControl(window, 0, L"BUTTON", L"Сохранить", BS_OWNERDRAW | WS_TABSTOP, IDOK),
+        MakeControl(window, 0, L"BUTTON", L"Отмена", BS_OWNERDRAW | WS_TABSTOP, IDCANCEL)
     };
     for (const HWND control : state.controls) {
         if (!control) return false;
+    }
+    if (!SetWindowSubclass(state.controls[0], CheckPaint, 1, 0) ||
+        !SetWindowSubclass(state.controls[5], CheckPaint, 1, 0)) return false;
+    for (const int id : {kIntervalControl, kHoldControl}) {
+        SendDlgItemMessageW(window, id, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(8, 8));
     }
     SendDlgItemMessageW(window, kIntervalControl, EM_SETLIMITTEXT, 4, 0);
     SendDlgItemMessageW(window, kHoldControl, EM_SETLIMITTEXT, 4, 0);
@@ -281,7 +336,46 @@ LRESULT CALLBACK SettingsProcedure(HWND window, UINT message, WPARAM wparam, LPA
     case WM_CREATE:
         if (!state) return -1;
         state->dpi = GetDpiForWindow(window);
+        { BOOL dark = TRUE; DwmSetWindowAttribute(window, 20, &dark, sizeof(dark)); }
         return CreateControls(window, *state) ? 0 : -1;
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLOREDIT: {
+        if (!state) break;
+        HDC dc = reinterpret_cast<HDC>(wparam);
+        SetTextColor(dc, reinterpret_cast<HWND>(lparam) == state->controls[6] ? kMuted : kInk);
+        SetBkColor(dc, message == WM_CTLCOLOREDIT ? kRaised : kSurface);
+        return reinterpret_cast<LRESULT>(message == WM_CTLCOLOREDIT ? state->raised : state->surface);
+    }
+    case WM_ERASEBKGND: {
+        if (!state) break;
+        RECT rect{}; GetClientRect(window, &rect);
+        FillRect(reinterpret_cast<HDC>(wparam), &rect, state->surface);
+        return 1;
+    }
+    case WM_PAINT: {
+        PAINTSTRUCT paint{}; HDC dc = BeginPaint(window, &paint);
+        if (state) {
+            SelectObject(dc, state->font); SetTextColor(dc, kInk); SetBkMode(dc, TRANSPARENT);
+            RECT title{Scaled(*state, 24), Scaled(*state, 19), Scaled(*state, 426), Scaled(*state, 45)};
+            DrawTextW(dc, L"Настройки", -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            RECT line{Scaled(*state, 24), Scaled(*state, 49), Scaled(*state, 426), Scaled(*state, 50)};
+            HBRUSH brush = CreateSolidBrush(kLine); FillRect(dc, &line, brush); DeleteObject(brush);
+        }
+        EndPaint(window, &paint); return 0;
+    }
+    case WM_DRAWITEM: {
+        const auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
+        if (!state || item->CtlType != ODT_BUTTON) break;
+        const bool primary = item->CtlID == IDOK;
+        const bool pressed = (item->itemState & ODS_SELECTED) != 0;
+        const COLORREF fill = pressed ? kHover : primary ? kAccent : kRaised;
+        HBRUSH brush = CreateSolidBrush(fill); FillRect(item->hDC, &item->rcItem, brush); DeleteObject(brush);
+        wchar_t label[64]{}; GetWindowTextW(item->hwndItem, label, static_cast<int>(std::size(label)));
+        SetBkMode(item->hDC, TRANSPARENT); SetTextColor(item->hDC, primary && !pressed ? kSurface : kInk);
+        RECT rect = item->rcItem; DrawTextW(item->hDC, label, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        if (item->itemState & ODS_FOCUS) { InflateRect(&rect, -3, -3); DrawFocusRect(item->hDC, &rect); }
+        return TRUE;
+    }
     case WM_COMMAND:
         if (!state || HIWORD(wparam) != BN_CLICKED) break;
         if (LOWORD(wparam) == IDOK) {
@@ -424,7 +518,7 @@ HICON CreateTrayIcon(bool enabled) {
     Bitmap image{CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &data, nullptr, 0)};
     if (!image.value || !data) return nullptr;
     auto* pixels = static_cast<std::uint32_t*>(data);
-    const std::uint32_t background = enabled ? 0xFF245E73U : 0xFF62676CU;
+    const std::uint32_t background = enabled ? 0xFF1C1C1CU : 0xFF555555U;
     for (int y = 0; y < size; ++y) {
         for (int x = 0; x < size; ++x) {
             const int corner_x = x < 6 ? 6 - x : (x > 25 ? x - 25 : 0);
@@ -575,7 +669,7 @@ void ShowSettings(HWND owner, const Settings& settings) {
     auto state = std::make_unique<SettingsWindow>();
     state->dpi = GetDpiForWindow(owner);
     if (state->dpi == 0) state->dpi = USER_DEFAULT_SCREEN_DPI;
-    RECT rectangle{0, 0, Scaled(*state, 450), Scaled(*state, 302)};
+    RECT rectangle{0, 0, Scaled(*state, 450), Scaled(*state, 387)};
     constexpr DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
     constexpr DWORD extended = WS_EX_CONTROLPARENT;
     AdjustWindowRectExForDpi(&rectangle, style, FALSE, extended, state->dpi);
