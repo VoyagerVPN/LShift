@@ -1,110 +1,49 @@
-<img src="resources/logo.png" width="72" height="72" alt="LShift">
-
 # LShift
 
-Исправление раскладки двойным нажатием **левого Shift**. Небольшое нативное приложение для Windows на C++20 и Win32.
+<img src="resources/logo.png" alt="LShift logo" width="64">
 
-Автор: [VoyagerVPN](https://github.com/VoyagerVPN). Оригинальный проект: [VoyagerVPN/LShift](https://github.com/VoyagerVPN/LShift).
+**English** · [Русский](README.ru.md)
 
-[Скачать Windows x64](https://github.com/VoyagerVPN/LShift/releases/latest) · [Обсуждения](https://github.com/VoyagerVPN/LShift/discussions)
+Press left Shift twice to fix a word or selection typed in the wrong keyboard layout. LShift converts between US QWERTY and Russian ЙЦУКЕН.
 
-## Возможности
+**Windows 10/11 x64 · Portable EXE**
 
-- Исправляет выделение или недавно набранное слово перед курсором.
-- Переключает стандартные раскладки **English US QWERTY ↔ Русская ЙЦУКЕН**.
-- Работает в трее: пауза, настройки интервала жеста, автозапуск текущего пользователя.
-- Интерфейс доступен на русском и английском; язык можно выбрать в настройках.
-- Не требует прав администратора, отдельного runtime или установки зависимостей.
-- В обычной сборке нет файлового журнала, сети, глобального keyboard hook и DLL в чужих процессах.
+[Download LShift.exe](https://github.com/VoyagerVPN/LShift/releases/latest/download/LShift.exe) · [Discussions](https://github.com/VoyagerVPN/LShift/discussions)
 
-| Исходный текст | После команды |
+## Quick start
+
+1. Install the **English (US)** and **Russian** keyboard layouts in Windows.
+2. Download and run `LShift.exe`. Look for its tray icon, including under the hidden icons arrow.
+3. Type `ghbdtn` in the wrong layout and press **left Shift twice** to turn it into `привет`. You can also select text before using the shortcut.
+4. Double-click the tray icon to open Settings. You can change the interface language, adjust the shortcut interval or enable startup with Windows. Right-click for the tray menu.
+
+A fresh profile uses Russian on Russian Windows and English on other systems. Existing profiles without a language choice keep Russian. The interface language is independent of the layouts that LShift converts between.
+
+## Features
+
+- Corrects a selection or the recently typed word before the caret. When there is no eligible text, the shortcut only switches the layout.
+- Converts each word in a selection separately. Words already mixing Latin and Cyrillic letters are preserved.
+- Runs from the tray and can pause or start with Windows for the current user.
+- The EXE runs without an installer, administrator rights or a separate runtime.
+
+| Before | After |
 | --- | --- |
 | `ghbdtn` | `привет` |
-| `привет ghbdtn` в выделении | `ghbdtn привет` |
-| `привет приvet ghbdtn` в выделении | `ghbdtn приvet привет` |
-| `;bdjq` | `живой` |
+| Selected `привет ghbdtn` | `ghbdtn привет` |
+| Selected `привет приvet ghbdtn` | `ghbdtn приvet привет` |
 
-Каждое слово выделения преобразуется отдельно. Слово с русскими и английскими буквами одновременно сохраняется целиком. Словарей и угадывания смысла нет. После исправления включается раскладка последнего преобразованного слова; в пустом поле или при отсутствии подходящего слова меняется только язык.
+For startup, keep the EXE in a permanent location. LShift saves its settings in `%LOCALAPPDATA%/LShift/settings.ini`. Close other layout switchers that use the same shortcut when testing. [Detailed behavior and checks](README.ru.md#поведение-и-ограничения).
 
-## Запуск
+## Build from source
 
-1. [Скачайте LShift.exe](https://github.com/VoyagerVPN/LShift/releases/latest/download/LShift.exe).
-2. Запустите скачанный файл. Установщик и дополнительные файлы не нужны. Значок может находиться под стрелкой скрытых значков Windows.
-3. Откройте настройки двойным щелчком по значку; меню доступно правым щелчком. При необходимости включите автозапуск.
-
-Обе раскладки должны быть установлены в Windows. Перед проверкой завершите другой переключатель с тем же жестом. Для автозапуска сохраните EXE в постоянной папке, например `D:\Programs\LShift`, и включите автозапуск уже оттуда.
-
-Полные тексты LICENSE и NOTICE встроены в EXE. Автор и ссылка на условия также доступны в свойствах файла Windows.
-
-Настройки хранятся в `%LOCALAPPDATA%\LShift\settings.ini`. Причина последнего результата видна при наведении на значок. Повторный запуск открывает настройки уже работающего экземпляра.
-
-В новом профиле язык выбирается по языку интерфейса Windows: русский для русского языка системы и английский для остальных. Существующие профили без сохранённого выбора остаются на русском; настройка языка сохраняется между запусками и не меняет рабочую пару раскладок.
-
-Если Explorer ещё не готов принять значок при входе в Windows, LShift продолжает запуск и повторяет регистрацию трея до успеха. После появления значка таймер повторов отключается. Автозапуск регистрируется для текущего пользователя; в диспетчере задач его состояние должно быть «Включено».
-
-## Поведение и ограничения
-
-Недавно набранное слово проверяется по последним 128 клавишам и фактическому тексту поля: весь удаляемый фрагмент должен совпасть с сохранённым набором. Предварительное выделение для него не создаётся. Пробелы после слова сохраняются; пауза между набором и командой не ограничена таймером. Мышь и навигация сбрасывают кандидат; последующий набор учитывается заново. Уведомление accessibility о фокусе само по себе не доказывает смену поля — поле, курсор и текст проверяются по команде. Пользовательское выделение заменяется целиком одной операцией; в UIA-пути для этого используется буфер обмена без восстановления прежнего содержимого.
-
-Сопоставление следует физическим клавишам, включая знаки на буквенных клавишах: `люблю ↔ k.,k.`. Такие знаки входят в слово; пробелы, дефисы, переносы, emoji и другие символы вне набора слова разделяют его. Цифры и `_` не определяют язык. Отдельные знаки без букв не преобразуются.
-
-Для работы нужны системные признаки редактируемого поля и поддержка стандартного ввода. Пароль, read-only, изменившийся контекст или несовпадающая история вызывают отказ от записи. Полное покрытие произвольных редакторов не гарантируется. Для исправления слова редактор может показать промежуточный текст; Undo иногда требует нескольких нажатий.
-
-Игры не определяются по списку процессов. Обычный ввод не вызывает UI Automation или перевода клавиш в Unicode; UIA используется только по команде. Влияние на игровой frame time отдельно не измерено.
-
-Жест выполняется после отпускания обычных клавиш ввода, навигации, функциональных клавиш и модификаторов. Состояния команд мультимедиа, браузера и запуска приложений его не блокируют. Посторонняя команда между двумя нажатиями отменяет незавершённый жест.
-
-## Сборка
-
-Windows 10/11 x64, Node.js 24 и Visual Studio 2022/2026 с компонентами C++ Desktop, Windows SDK, CMake и Ninja. Зависимости из сети не загружаются.
+Use Windows 10/11 x64, Node.js 24 and Visual Studio 2022 or 2026 with Desktop development with C++, Windows SDK, CMake and Ninja.
 
 ```powershell
 node scripts/build.mjs
 ```
 
-Release EXE и инструкция создаются в `dist`. Используются C++20, статический MSVC runtime, `/W4 /WX /permissive-`, `/O2`, `/GL` и `/LTCG`. Кэши и временные файлы находятся в `.cache`.
+The release EXE is written to `dist/`.
 
-```powershell
-# Ядро без приложения
-node scripts/build.mjs --core-only
+## License
 
-# Архив с проверкой размеров и SHA256 каждого вложенного файла
-./scripts/package.ps1
-```
-
-`--diagnostics --target=LShift` собирает отдельный EXE для разработки в `.cache/diagnostic-dist`; обычная сборка остаётся без диагностики.
-
-## Проверки
-
-Штатная сборка запускает CTest. Проверки, которым не удалось получить изолированный desktop, отмечаются пропущенными с кодом 77.
-
-```powershell
-# Пассивный запуск, метаданные, ресурсы значков и замер до первой текстовой команды
-# Предварительно завершите работающий LShift.
-./scripts/check-release.ps1
-
-# Только проверка EXE-ресурсов, без запуска приложения
-./scripts/check-release.ps1 -ResourcesOnly
-
-# Собственные редакторы и трей: запускать только при свободном вводе.
-node scripts/check-desktop.mjs
-
-# Полная цепочка через запущенный LShift: SendInput → Raw Input → worker.
-# Только при свободном вводе; используется отдельное собственное окно Edge.
-node scripts/automation-test.mjs --live-app --report .cache/live-results.json
-```
-
-В 0.1.7 локально прошли **59/59** сценариев input/textarea/contenteditable, 16 сценариев Win32 Edit, цепочка из 12 повторных преобразований, настройки и модель меню трея. Windows CI настроен на сборку и CTest; активные GUI-прогоны требуют интерактивного рабочего стола.
-
-- [Архитектура и основания решений](docs/IMPLEMENTATION.md)
-- [Результаты и границы проверок](docs/VALIDATION.md)
-- [История изменений](CHANGELOG.md)
-- [Исследование существующих решений](OPEN_SOURCE_REVIEW.md)
-
-## Лицензия и использование кода
-
-[MIT с Commons Clause 1.0](LICENSE). Код доступен для изучения, использования, изменений и бесплатного распространения. При распространении сохраните автора **VoyagerVPN**, ссылку **https://github.com/VoyagerVPN/LShift** и полный текст лицензии. Ссылка входит в сохраняемое copyright-уведомление; готовая атрибуция также находится в [NOTICE](NOTICE). Это относится и к изменённой версии, опубликованной отдельным репозиторием без GitHub Fork.
-
-Уведомлять автора или получать предварительное разрешение для бесплатного распространения с соблюдением LICENSE не требуется. Продажа самой программы и продуктов или услуг, ценность которых полностью либо существенно основана на её функциональности, ограничена Commons Clause; для отдельного разрешения свяжитесь с автором через [Discussions](https://github.com/VoyagerVPN/LShift/discussions).
-
-Публичный доступ к коду предоставлен на условиях source-available. Полные юридические условия находятся в LICENSE.
+[MIT with Commons Clause 1.0](LICENSE). The source is available under those terms. See [NOTICE](NOTICE) for attribution and [LICENSE](LICENSE) for the restrictions on sale. The EXE includes both notices.
