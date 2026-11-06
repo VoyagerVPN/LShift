@@ -25,6 +25,7 @@ constexpr int EnabledControl = 2001;
 constexpr int IntervalControl = 2002;
 constexpr int HoldControl = 2003;
 constexpr int AutostartControl = 2004;
+constexpr int LanguageControl = 2005;
 
 void Require(bool condition, const char* detail) {
     if (!condition) throw std::runtime_error(detail);
@@ -157,23 +158,27 @@ private:
 }
 
 void CheckControls(HWND window, const lshift::Settings& settings, bool autostart) {
-    if (WindowText(window) != L"Настройки LShift") {
+    const bool ru = settings.language == lshift::UiLanguage::Russian;
+    if (WindowText(window) != (ru ? L"Настройки LShift" : L"LShift Settings")) {
         std::cerr << "Actual title UTF-16:";
         for (const wchar_t code : WindowText(window)) std::cerr << ' ' << std::hex << static_cast<unsigned>(code);
         std::cerr << std::dec << '\n';
     }
-    Require(WindowText(window) == L"Настройки LShift", "settings window title");
+    Require(WindowText(window) == (ru ? L"Настройки LShift" : L"LShift Settings"), "settings window title");
     Require(GetClassLongPtrW(window, GCLP_HICON) != 0 && GetClassLongPtrW(window, GCLP_HICONSM) != 0,
             "settings window exposes the application icons to Windows");
     const HWND enabled = Control(window, EnabledControl, L"BUTTON");
     const HWND interval = Control(window, IntervalControl, L"EDIT");
     const HWND hold = Control(window, HoldControl, L"EDIT");
     const HWND startup = Control(window, AutostartControl, L"BUTTON");
+    const HWND language = Control(window, LanguageControl, L"COMBOBOX");
     const HWND save = Control(window, IDOK, L"BUTTON");
     const HWND cancel = Control(window, IDCANCEL, L"BUTTON");
-    Require(WindowText(enabled) == L"Включить двойной левый Shift", "enabled checkbox label");
-    Require(WindowText(startup) == L"Запускать LShift при входе в Windows", "autostart checkbox label");
-    Require(WindowText(save) == L"Сохранить" && WindowText(cancel) == L"Отмена", "Save and Cancel buttons");
+    Require(WindowText(enabled) == (ru ? L"Включить двойной левый Shift" : L"Enable double left Shift"), "enabled checkbox label");
+    Require(WindowText(startup) == (ru ? L"Запускать LShift при входе в Windows" : L"Start LShift when signing in to Windows"), "autostart checkbox label");
+    Require(WindowText(save) == (ru ? L"Сохранить" : L"Save") && WindowText(cancel) == (ru ? L"Отмена" : L"Cancel"), "Save and Cancel buttons");
+    Require(SendMessageW(language, CB_GETCOUNT, 0, 0) == 2 &&
+            SendMessageW(language, CB_GETCURSEL, 0, 0) == (ru ? 1 : 0), "chosen language is selected");
     Require(WindowText(interval) == std::to_wstring(settings.double_tap_ms), "double-tap interval value");
     Require(WindowText(hold) == std::to_wstring(settings.hold_ms), "hold duration value");
     Require(SendMessageW(enabled, BM_GETCHECK, 0, 0) == (settings.enabled ? BST_CHECKED : BST_UNCHECKED),
@@ -361,7 +366,10 @@ void CheckIsolatedProfile() {
 
 int wmain(int argc, wchar_t** argv) {
     try {
-        Require(argc == 2, "usage: ui_tests.exe <output.png>");
+        Require(argc == 2 || argc == 3, "usage: ui_tests.exe <output.png> [en|ru]");
+        const std::wstring desktop_name = L"LShift.Ui.Tests." + std::to_wstring(GetCurrentProcessId());
+        const HDESK desktop = CreateDesktopW(desktop_name.c_str(), nullptr, nullptr, 0, GENERIC_ALL, nullptr);
+        Require(desktop != nullptr && SetThreadDesktop(desktop) != FALSE, "use a private desktop");
         // DPI задаётся до COM и создания любых тестовых HWND.
         const BOOL changed = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         Require(changed || AreDpiAwarenessContextsEqual(GetThreadDpiAwarenessContext(),
@@ -375,7 +383,9 @@ int wmain(int argc, wchar_t** argv) {
         const bool autostart = lshift::AutostartEnabled();
         Apartment apartment;
         Fixture fixture;
-        const lshift::Settings values{true, 475, 200};
+        const std::wstring_view language = argc == 3 ? argv[2] : L"ru";
+        Require(language == L"en" || language == L"ru", "supported test language");
+        const lshift::Settings values{true, 475, 200, language == L"ru" ? lshift::UiLanguage::Russian : lshift::UiLanguage::English};
         fixture.Open(values);
         CheckControls(fixture.Window(), values, autostart);
         const HWND enabled = GetDlgItem(fixture.Window(), EnabledControl);

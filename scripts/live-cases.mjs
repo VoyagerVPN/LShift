@@ -79,21 +79,24 @@ export async function runLiveCases({evaluate, probe, env, browserPid, pause, rep
       results.push(record);console.log(JSON.stringify(record));continue;
     }
     const expectedBefore=test.before??(test.expected.includes('привет')?test.expected.replace('привет','ghbdtn'):test.expected);
-    if(before.value!==expectedBefore||!before.focused) throw new Error(`live setup failed ${test.kind}/${test.name}: ${JSON.stringify({value:before.value,expectedBefore,focused:before.focused})}`);
+    // Caps Lock принадлежит пользователю: проверяем оба регистра, не переключая его.
+    const upperPlain = test.name === 'plain' && before.value === 'GHBDTN';
+    if((before.value!==expectedBefore&&!upperPlain)||!before.focused) throw new Error(`live setup failed ${test.kind}/${test.name}: ${JSON.stringify({value:before.value,expectedBefore,focused:before.focused})}`);
     await evaluate('window.lshiftFixture.beginObservation()');
     await send(['<Shift>','<Shift>']);
     await pause(350);
     const after=await evaluate('window.lshiftFixture.oracle()');
     const layout=await probe(env,browserPid,['--inspect-layout']);
     const converted=!test.unchanged;
-    const record={name:`${test.kind}/${test.name}`,attempt,valueMatches:after.value===test.expected,
-      caretMatches:after.start===test.expected.length&&after.end===test.expected.length,
+    const expected = upperPlain ? 'ПРИВЕТ' : test.expected;
+    const record={name:`${test.kind}/${test.name}`,attempt,valueMatches:after.value===expected,
+      caretMatches:after.start===expected.length&&after.end===expected.length,
       layoutMatches:layout.layout_after===(converted?0x04190419:0x04090409),
       noProgramSelection:Boolean(test.selected)||after.observation.nonempty===0, roundTripMatches:true};
     if(test.roundTrip&&record.valueMatches) {
       await send(['<Shift>','<Shift>']);await pause(350);
       const reverse=await evaluate('window.lshiftFixture.oracle()');
-      record.roundTripMatches=reverse.value==='ghbdtn';
+      record.roundTripMatches=reverse.value===(upperPlain ? 'GHBDTN' : 'ghbdtn');
     }
     record.passed=record.valueMatches&&record.caretMatches&&record.layoutMatches&&record.noProgramSelection&&record.roundTripMatches;
     results.push(record);console.log(JSON.stringify(record));

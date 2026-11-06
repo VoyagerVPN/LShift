@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(LShift VERSION 0.1.13 LANGUAGES CXX RC)
+project(LShift VERSION 0.1.14 LANGUAGES CXX RC)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -24,7 +24,7 @@ configure_file(resources/README.txt "${LSHIFT_APP_OUTPUT_DIRECTORY}/README.txt" 
 set_source_files_properties(resources/app.rc PROPERTIES OBJECT_DEPENDS
   "${CMAKE_SOURCE_DIR}/resources/app.ico;${CMAKE_SOURCE_DIR}/LICENSE;${CMAKE_SOURCE_DIR}/NOTICE")
 if(LSHIFT_BUILD_APP)
-  add_library(lshift_windows src/shell.cpp src/text_service.cpp src/text_context.cpp src/clipboard.cpp)
+  add_library(lshift_windows src/shell.cpp src/text_service.cpp src/text_context.cpp src/clipboard.cpp src/localization.cpp)
   target_compile_definitions(lshift_windows PUBLIC LSHIFT_DIAGNOSTICS=$<BOOL:${LSHIFT_DIAGNOSTICS}>)
   target_link_libraries(lshift_windows PUBLIC lshift_core user32 shell32 gdi32 advapi32 ole32 oleaut32 uuid comctl32 dwmapi uiautomationcore)
   add_executable(LShift WIN32 src/main.cpp resources/app.rc)
@@ -70,4 +70,7 @@ if(LSHIFT_BUILD_APP)
   set_target_properties(LShift PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${LSHIFT_APP_OUTPUT_DIRECTORY}"
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${LSHIFT_APP_OUTPUT_DIRECTORY}")
   target_link_options(LShift PRIVATE /MANIFEST:EMBED /MANIFESTINPUT:${CMAKE_SOURCE_DIR}/resources/app.manifest)
+  foreach(target LShift shell_tests native_tests ui_tests tray_tests automation_probe clipboard_tests text_context_tests)
+    target_sources(${target} PRIVATE resources/strings.rc)
+  endforeach()
 endif()

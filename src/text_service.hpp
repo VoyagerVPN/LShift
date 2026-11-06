@@ -13,6 +13,7 @@ struct TextRequest {
     RecentKeys recent_keys{};
     std::uintptr_t recent_layout = 0;
     HWND focus = nullptr;
+    UiLanguage language = UiLanguage::English;
 };
 enum class TextStatus { Converted, Switched, Unsupported, Stale, Failed, Partial, Submitted };
 struct TextResult {

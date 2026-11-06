@@ -1,4 +1,5 @@
 #include "shell.hpp"
+#include "localization.hpp"
 
 #include <shellapi.h>
 #include <commctrl.h>
@@ -19,6 +20,7 @@ constexpr int kEnabledControl = 2001;
 constexpr int kIntervalControl = 2002;
 constexpr int kHoldControl = 2003;
 constexpr int kAutostartControl = 2004;
+constexpr int kLanguageControl = 2005;
 constexpr UINT kMinInterval = 150;
 constexpr UINT kMaxInterval = 800;
 constexpr UINT kMinHold = 100;
@@ -97,7 +99,8 @@ struct MenuSession {
 
 [[nodiscard]] bool ValidSettings(const Settings& settings) noexcept {
     return settings.double_tap_ms >= kMinInterval && settings.double_tap_ms <= kMaxInterval &&
-           settings.hold_ms >= kMinHold && settings.hold_ms <= kMaxHold;
+           settings.hold_ms >= kMinHold && settings.hold_ms <= kMaxHold &&
+           (settings.language == UiLanguage::English || settings.language == UiLanguage::Russian);
 }
 
 [[nodiscard]] std::optional<std::uint32_t> ParseNumber(std::wstring_view text,
@@ -148,9 +151,8 @@ void SetTrayContents(NOTIFYICONDATAW& data, HICON icon, bool enabled) {
     data.uFlags |= NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
     data.uCallbackMessage = kTrayMessage;
     data.hIcon = icon;
-    const wchar_t* tip = enabled ? L"LShift — двойной левый Shift включён"
-                                 : L"LShift — работа приостановлена";
-    lstrcpynW(data.szTip, tip, static_cast<int>(std::size(data.szTip)));
+    const auto tip = LocalizedText(enabled ? StringId::TrayEnabledTip : StringId::TrayPausedTip, LoadSettings().language);
+    lstrcpynW(data.szTip, tip.c_str(), static_cast<int>(std::size(data.szTip)));
 }
 
 struct SettingsWindow {
@@ -160,7 +162,8 @@ struct SettingsWindow {
     HFONT font = nullptr;
     HBRUSH surface = CreateSolidBrush(kSurface);
     HBRUSH raised = CreateSolidBrush(kRaised);
-    std::array<HWND, 9> controls{};
+    UiLanguage language = UiLanguage::English;
+    std::array<HWND, 11> controls{};
     ~SettingsWindow() { if (font) DeleteObject(font); if (surface) DeleteObject(surface); if (raised) DeleteObject(raised); }
 };
 
@@ -184,10 +187,11 @@ void SetWindowFont(SettingsWindow& state) {
 }
 
 void PositionControls(SettingsWindow& state) {
-    constexpr std::array<std::array<int, 4>, 9> rectangles{{
+    constexpr std::array<std::array<int, 4>, 11> rectangles{{
         {24, 60, 402, 32}, {24, 117, 305, 22}, {346, 113, 80, 27},
         {24, 162, 305, 38}, {346, 162, 80, 27}, {24, 219, 402, 32},
-        {24, 270, 402, 38}, {226, 329, 96, 34}, {330, 329, 96, 34}
+        {24, 310, 402, 38}, {226, 369, 96, 34}, {330, 369, 96, 34},
+        {24, 266, 200, 27}, {250, 261, 176, 150}
     }};
     for (std::size_t index = 0; index < state.controls.size(); ++index) {
         const auto& rectangle = rectangles[index];
@@ -235,6 +239,79 @@ LRESULT CALLBACK CheckPaint(HWND control, UINT message, WPARAM wparam, LPARAM lp
     return result;
 }
 
+void PaintLanguageSelector(HWND control, HDC dc) {
+    RECT rect{};
+    GetClientRect(control, &rect);
+    const int dpi = static_cast<int>(GetDpiForWindow(control));
+    const auto scaled = [dpi](int value) { return MulDiv(value, dpi, 96); };
+    HBRUSH background = CreateSolidBrush(kRaised);
+    FillRect(dc, &rect, background);
+    DeleteObject(background);
+    HBRUSH border = CreateSolidBrush(GetFocus() == control ? kMuted : kLine);
+    FrameRect(dc, &rect, border);
+    DeleteObject(border);
+    const auto selected = SendMessageW(control, CB_GETCURSEL, 0, 0);
+    const wchar_t* label = selected == 1 ? L"Русский" : L"English";
+    SelectObject(dc, reinterpret_cast<HFONT>(SendMessageW(control, WM_GETFONT, 0, 0)));
+    SetTextColor(dc, IsWindowEnabled(control) ? kInk : kMuted);
+    SetBkMode(dc, TRANSPARENT);
+    RECT text = rect;
+    text.left += scaled(9);
+    text.right -= scaled(30);
+    DrawTextW(dc, label, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    const int center_x = rect.right - scaled(14);
+    const int center_y = (rect.top + rect.bottom) / 2;
+    HPEN pen = CreatePen(PS_SOLID, scaled(1), kMuted);
+    const HGDIOBJ previous = SelectObject(dc, pen);
+    MoveToEx(dc, center_x - scaled(4), center_y - scaled(2), nullptr);
+    LineTo(dc, center_x, center_y + scaled(2));
+    LineTo(dc, center_x + scaled(5), center_y - scaled(3));
+    SelectObject(dc, previous);
+    DeleteObject(pen);
+}
+
+LRESULT CALLBACK LanguageSelectorPaint(HWND control, UINT message, WPARAM wparam, LPARAM lparam,
+                                       UINT_PTR, DWORD_PTR) {
+    if (message == WM_PAINT) {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(control, &paint);
+        PaintLanguageSelector(control, dc);
+        EndPaint(control, &paint);
+        return 0;
+    }
+    if (message == WM_PRINTCLIENT) {
+        PaintLanguageSelector(control, reinterpret_cast<HDC>(wparam));
+        return 0;
+    }
+    if (message == WM_NCDESTROY) RemoveWindowSubclass(control, LanguageSelectorPaint, 1);
+    const LRESULT result = DefSubclassProc(control, message, wparam, lparam);
+    if (message == CB_SETCURSEL || message == WM_ENABLE || message == WM_SETFOCUS ||
+        message == WM_KILLFOCUS || message == WM_LBUTTONUP || message == WM_KEYUP) {
+        InvalidateRect(control, nullptr, FALSE);
+    }
+    return result;
+}
+
+LRESULT CALLBACK LanguageListPaint(HWND control, UINT message, WPARAM wparam, LPARAM lparam,
+                                   UINT_PTR, DWORD_PTR) {
+    if (message == WM_NCDESTROY) RemoveWindowSubclass(control, LanguageListPaint, 1);
+    const LRESULT result = DefSubclassProc(control, message, wparam, lparam);
+    if (message == WM_NCPAINT) {
+        RECT rect{};
+        if (GetWindowRect(control, &rect)) {
+            OffsetRect(&rect, -rect.left, -rect.top);
+            HDC dc = GetWindowDC(control);
+            if (dc) {
+                HBRUSH border = CreateSolidBrush(kLine);
+                FrameRect(dc, &rect, border);
+                DeleteObject(border);
+                ReleaseDC(control, dc);
+            }
+        }
+    }
+    return result;
+}
+
 [[nodiscard]] HWND MakeControl(HWND parent, DWORD extended_style, const wchar_t* type,
                                const wchar_t* text, DWORD style, int id) {
     return CreateWindowExW(extended_style, type, text, WS_CHILD | WS_VISIBLE | style,
@@ -248,30 +325,55 @@ void FillSettings(HWND window, const Settings& settings) {
     SetDlgItemInt(window, kIntervalControl, settings.double_tap_ms, FALSE);
     SetDlgItemInt(window, kHoldControl, settings.hold_ms, FALSE);
     CheckDlgButton(window, kAutostartControl, AutostartEnabled() ? BST_CHECKED : BST_UNCHECKED);
+    SendDlgItemMessageW(window, kLanguageControl, CB_SETCURSEL,
+                        settings.language == UiLanguage::Russian ? 1 : 0, 0);
+}
+
+void UpdateWindowLanguage(HWND window, SettingsWindow& state, UiLanguage language) {
+    state.language = language;
+    SetWindowTextW(window, LocalizedText(StringId::SettingsTitle, language).c_str());
+    constexpr std::pair<std::size_t, StringId> labels[] = {
+        {0, StringId::EnableGesture}, {1, StringId::IntervalLabel}, {3, StringId::HoldLabel},
+        {5, StringId::AutostartLabel}, {6, StringId::Explanation}, {7, StringId::Save},
+        {8, StringId::Cancel}, {9, StringId::InterfaceLanguage}
+    };
+    for (const auto& [index, id] : labels) {
+        SetWindowTextW(state.controls[index], LocalizedText(id, language).c_str());
+    }
+    InvalidateRect(window, nullptr, TRUE);
 }
 
 [[nodiscard]] bool CreateControls(HWND window, SettingsWindow& state) {
+    const auto label = [&state](StringId id) { return LocalizedText(id, state.language); };
     state.controls = {
-        MakeControl(window, 0, L"BUTTON", L"Включить двойной левый Shift",
+        MakeControl(window, 0, L"BUTTON", label(StringId::EnableGesture).c_str(),
                     BS_AUTOCHECKBOX | WS_TABSTOP, kEnabledControl),
-        MakeControl(window, 0, L"STATIC", L"Интервал между нажатиями, мс (150–800)", 0, -1),
+        MakeControl(window, 0, L"STATIC", label(StringId::IntervalLabel).c_str(), 0, -1),
         MakeControl(window, 0, L"EDIT", L"",
                     ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP, kIntervalControl),
-        MakeControl(window, 0, L"STATIC", L"Максимальная длительность нажатия, мс\n(100–500)", 0, -1),
+        MakeControl(window, 0, L"STATIC", label(StringId::HoldLabel).c_str(), 0, -1),
         MakeControl(window, 0, L"EDIT", L"",
                     ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP, kHoldControl),
-        MakeControl(window, 0, L"BUTTON", L"Запускать LShift при входе в Windows",
+        MakeControl(window, 0, L"BUTTON", label(StringId::AutostartLabel).c_str(),
                     BS_AUTOCHECKBOX | WS_TABSTOP, kAutostartControl),
         MakeControl(window, 0, L"STATIC",
-                    L"Исправляет последнее слово или выделение\nв доступном текстовом поле.", 0, -1),
-        MakeControl(window, 0, L"BUTTON", L"Сохранить", BS_OWNERDRAW | WS_TABSTOP, IDOK),
-        MakeControl(window, 0, L"BUTTON", L"Отмена", BS_OWNERDRAW | WS_TABSTOP, IDCANCEL)
+                    label(StringId::Explanation).c_str(), 0, -1),
+        MakeControl(window, 0, L"BUTTON", label(StringId::Save).c_str(), BS_OWNERDRAW | WS_TABSTOP, IDOK),
+        MakeControl(window, 0, L"BUTTON", label(StringId::Cancel).c_str(), BS_OWNERDRAW | WS_TABSTOP, IDCANCEL),
+        MakeControl(window, 0, L"STATIC", label(StringId::InterfaceLanguage).c_str(), 0, -1),
+        MakeControl(window, 0, L"COMBOBOX", L"", CBS_DROPDOWNLIST | CBS_OWNERDRAWFIXED | CBS_HASSTRINGS | WS_VSCROLL | WS_TABSTOP, kLanguageControl)
     };
     for (const HWND control : state.controls) {
         if (!control) return false;
     }
+    SendDlgItemMessageW(window, kLanguageControl, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"English"));
+    SendDlgItemMessageW(window, kLanguageControl, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Русский"));
     if (!SetWindowSubclass(state.controls[0], CheckPaint, 1, 0) ||
-        !SetWindowSubclass(state.controls[5], CheckPaint, 1, 0)) return false;
+        !SetWindowSubclass(state.controls[5], CheckPaint, 1, 0) ||
+        !SetWindowSubclass(state.controls[10], LanguageSelectorPaint, 1, 0)) return false;
+    COMBOBOXINFO combo{sizeof(combo)};
+    if (!GetComboBoxInfo(state.controls[10], &combo) || !combo.hwndList ||
+        !SetWindowSubclass(combo.hwndList, LanguageListPaint, 1, 0)) return false;
     for (const int id : {kIntervalControl, kHoldControl}) {
         SendDlgItemMessageW(window, id, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(8, 8));
     }
@@ -292,31 +394,27 @@ void FillSettings(HWND window, const Settings& settings) {
                        minimum, maximum);
 }
 
-void SaveFromWindow(HWND window, const SettingsWindow& state) {
+void SaveFromWindow(HWND window, SettingsWindow& state) {
+    const auto label = [&state](StringId id) { return LocalizedText(id, state.language); };
     const auto interval = ReadControlNumber(window, kIntervalControl, kMinInterval, kMaxInterval);
     const auto hold = ReadControlNumber(window, kHoldControl, kMinHold, kMaxHold);
     if (!interval || !hold) {
-        MessageBoxW(window, L"Интервал должен быть от 150 до 800 мс, а длительность нажатия — "
-                            L"от 100 до 500 мс.", L"Настройки LShift", MB_OK | MB_ICONWARNING);
+        MessageBoxW(window, label(StringId::Validation).c_str(), label(StringId::SettingsTitle).c_str(), MB_OK | MB_ICONWARNING);
         SetFocus(GetDlgItem(window, interval ? kHoldControl : kIntervalControl));
         return;
     }
     const Settings selected{IsDlgButtonChecked(window, kEnabledControl) == BST_CHECKED,
-                            *interval, *hold};
+                            *interval, *hold, SendDlgItemMessageW(window, kLanguageControl, CB_GETCURSEL, 0, 0) == 1 ?
+                            UiLanguage::Russian : UiLanguage::English};
     if (!SaveSettings(selected)) {
-        MessageBoxW(window, L"Не удалось сохранить настройки в папке LShift внутри LOCALAPPDATA. "
-                            L"Проверьте доступ к папке и свободное место.",
-                    L"Настройки LShift", MB_OK | MB_ICONERROR);
+        MessageBoxW(window, label(StringId::SaveError).c_str(), label(StringId::SettingsTitle).c_str(), MB_OK | MB_ICONERROR);
         return;
     }
+    UpdateWindowLanguage(window, state, selected.language);
     PostMessageW(state.owner, kSettingsChanged, 0, 0);
     const bool autostart = IsDlgButtonChecked(window, kAutostartControl) == BST_CHECKED;
     if (autostart != AutostartEnabled() && !SetAutostart(autostart)) {
-        MessageBoxW(window, L"Настройки сохранены, но изменить автозапуск не удалось. "
-                            L"Проверьте доступ к настройкам текущего пользователя. "
-                            L"Для автозапуска путь программы вместе с параметром должен быть "
-                            L"не длиннее 260 символов.",
-                    L"Автозапуск LShift", MB_OK | MB_ICONERROR);
+        MessageBoxW(window, label(StringId::AutostartError).c_str(), label(StringId::AutostartTitle).c_str(), MB_OK | MB_ICONERROR);
         CheckDlgButton(window, kAutostartControl, AutostartEnabled() ? BST_CHECKED : BST_UNCHECKED);
         return;
     }
@@ -339,12 +437,13 @@ LRESULT CALLBACK SettingsProcedure(HWND window, UINT message, WPARAM wparam, LPA
         { BOOL dark = TRUE; DwmSetWindowAttribute(window, 20, &dark, sizeof(dark)); }
         return CreateControls(window, *state) ? 0 : -1;
     case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORLISTBOX:
     case WM_CTLCOLOREDIT: {
         if (!state) break;
         HDC dc = reinterpret_cast<HDC>(wparam);
         SetTextColor(dc, reinterpret_cast<HWND>(lparam) == state->controls[6] ? kMuted : kInk);
-        SetBkColor(dc, message == WM_CTLCOLOREDIT ? kRaised : kSurface);
-        return reinterpret_cast<LRESULT>(message == WM_CTLCOLOREDIT ? state->raised : state->surface);
+        SetBkColor(dc, message == WM_CTLCOLOREDIT || message == WM_CTLCOLORLISTBOX ? kRaised : kSurface);
+        return reinterpret_cast<LRESULT>(message == WM_CTLCOLOREDIT || message == WM_CTLCOLORLISTBOX ? state->raised : state->surface);
     }
     case WM_ERASEBKGND: {
         if (!state) break;
@@ -357,7 +456,7 @@ LRESULT CALLBACK SettingsProcedure(HWND window, UINT message, WPARAM wparam, LPA
         if (state) {
             SelectObject(dc, state->font); SetTextColor(dc, kInk); SetBkMode(dc, TRANSPARENT);
             RECT title{Scaled(*state, 24), Scaled(*state, 19), Scaled(*state, 426), Scaled(*state, 45)};
-            DrawTextW(dc, L"Настройки", -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            DrawTextW(dc, LocalizedText(StringId::SettingsHeading, state->language).c_str(), -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
             RECT line{Scaled(*state, 24), Scaled(*state, 49), Scaled(*state, 426), Scaled(*state, 50)};
             HBRUSH brush = CreateSolidBrush(kLine); FillRect(dc, &line, brush); DeleteObject(brush);
         }
@@ -365,6 +464,21 @@ LRESULT CALLBACK SettingsProcedure(HWND window, UINT message, WPARAM wparam, LPA
     }
     case WM_DRAWITEM: {
         const auto* item = reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
+        if (state && item->CtlType == ODT_COMBOBOX && item->CtlID == kLanguageControl) {
+            const bool selected = (item->itemState & ODS_SELECTED) != 0;
+            HBRUSH brush = CreateSolidBrush(selected ? kHover : kRaised);
+            FillRect(item->hDC, &item->rcItem, brush); DeleteObject(brush);
+            SetBkMode(item->hDC, TRANSPARENT); SetTextColor(item->hDC, kInk);
+            RECT text = item->rcItem; text.left += Scaled(*state, 8);
+            const wchar_t* label = item->itemID == 1 ? L"Русский" : L"English";
+            if (item->itemID != static_cast<UINT>(-1)) DrawTextW(item->hDC, label, -1, &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            if (item->itemState & ODS_FOCUS) {
+                HBRUSH outline = CreateSolidBrush(kMuted);
+                FrameRect(item->hDC, &item->rcItem, outline);
+                DeleteObject(outline);
+            }
+            return TRUE;
+        }
         if (!state || item->CtlType != ODT_BUTTON) break;
         const bool primary = item->CtlID == IDOK;
         const bool pressed = (item->itemState & ODS_SELECTED) != 0;
@@ -376,7 +490,19 @@ LRESULT CALLBACK SettingsProcedure(HWND window, UINT message, WPARAM wparam, LPA
         if (item->itemState & ODS_FOCUS) { InflateRect(&rect, -3, -3); DrawFocusRect(item->hDC, &rect); }
         return TRUE;
     }
+    case WM_MEASUREITEM: {
+        auto* item = reinterpret_cast<MEASUREITEMSTRUCT*>(lparam);
+        if (item->CtlType == ODT_COMBOBOX && item->CtlID == kLanguageControl) {
+            item->itemHeight = static_cast<UINT>(state ? Scaled(*state, 23) : 23);
+            return TRUE;
+        }
+        break;
+    }
     case WM_COMMAND:
+        if (state && LOWORD(wparam) == kLanguageControl && HIWORD(wparam) == CBN_SELCHANGE) {
+            InvalidateRect(state->controls[10], nullptr, FALSE);
+            return 0;
+        }
         if (!state || HIWORD(wparam) != BN_CLICKED) break;
         if (LOWORD(wparam) == IDOK) {
             SaveFromWindow(window, *state);
@@ -427,15 +553,19 @@ std::filesystem::path SettingsPath() {
 
 Settings LoadSettings() {
     Settings settings;
+    settings.language = SystemUiLanguage(GetUserDefaultUILanguage());
     try {
         const auto path = SettingsPath();
         if (path.empty()) return settings;
+        if (std::filesystem::exists(path)) settings.language = UiLanguage::Russian;
         settings.enabled = ReadNumber(path, L"Enabled", settings.enabled ? 1U : 0U, 0, 1) != 0;
         settings.double_tap_ms = ReadNumber(path, L"DoubleTapMs", settings.double_tap_ms,
                                              kMinInterval, kMaxInterval);
         settings.hold_ms = ReadNumber(path, L"HoldMs", settings.hold_ms, kMinHold, kMaxHold);
+        settings.language = ReadNumber(path, L"Language", settings.language == UiLanguage::Russian ? 1U : 0U,
+                                       0, 1) == 1 ? UiLanguage::Russian : UiLanguage::English;
     } catch (const std::exception&) {
-        return Settings{};
+        return settings;
     }
     return settings;
 }
@@ -453,7 +583,8 @@ bool SaveSettings(const Settings& settings) {
         const std::wstring contents = std::wstring(L"\xFEFF[Settings]\r\nEnabled=") +
             (settings.enabled ? L"1" : L"0") + L"\r\nDoubleTapMs=" +
             std::to_wstring(settings.double_tap_ms) + L"\r\nHoldMs=" +
-            std::to_wstring(settings.hold_ms) + L"\r\n";
+            std::to_wstring(settings.hold_ms) + L"\r\nLanguage=" +
+            (settings.language == UiLanguage::Russian ? L"1" : L"0") + L"\r\n";
         FileHandle file{CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
                                    FILE_ATTRIBUTE_NORMAL, nullptr)};
         if (file.value == INVALID_HANDLE_VALUE) return false;
@@ -595,16 +726,18 @@ void ShowTrayMenu(HWND window, bool enabled, POINT point) {
     MenuSession session;
     Menu menu{CreatePopupMenu()};
     if (!menu.value) return;
+    const auto language = LoadSettings().language;
+    const auto label = [language](StringId id) { return LocalizedText(id, language); };
     AppendMenuW(menu.value, MF_STRING | (enabled ? MF_CHECKED : MF_UNCHECKED),
-                 kToggleEnabled, L"Включено");
-    AppendMenuW(menu.value, MF_STRING, kOpenSettings, L"Настройки…");
+                 kToggleEnabled, label(StringId::MenuEnabled).c_str());
+    AppendMenuW(menu.value, MF_STRING, kOpenSettings, label(StringId::MenuSettings).c_str());
 #if LSHIFT_DIAGNOSTICS
-    AppendMenuW(menu.value, MF_STRING, kOpenDiagnostics, L"Открыть журнал диагностики");
+    AppendMenuW(menu.value, MF_STRING, kOpenDiagnostics, label(StringId::MenuDiagnostics).c_str());
 #endif
     AppendMenuW(menu.value, MF_STRING | (AutostartEnabled() ? MF_CHECKED : MF_UNCHECKED),
-                 kToggleAutostart, L"Запускать при входе в Windows");
+                 kToggleAutostart, label(StringId::MenuAutostart).c_str());
     AppendMenuW(menu.value, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu.value, MF_STRING, kExit, L"Выход");
+    AppendMenuW(menu.value, MF_STRING, kExit, label(StringId::MenuExit).c_str());
     TPMPARAMS position{};
     position.cbSize = sizeof(position);
     bool exclude_icon = false;
@@ -628,7 +761,7 @@ void ShowTrayMenu(HWND window, bool enabled, POINT point) {
         MenuActivation activation(window);
         if (!activation.Activate(point)) {
             if (registered_tray_window == window) {
-                SetTrayStatus(window, L"Не удалось открыть меню. Повторите щелчок.");
+                SetTrayStatus(window, label(StringId::MenuError));
             }
             return;
         }
@@ -663,21 +796,22 @@ void ShowSettings(HWND owner, const Settings& settings) {
     type.hbrBackground = GetSysColorBrush(COLOR_BTNFACE);
     type.lpszClassName = kSettingsClass;
     if (!RegisterClassExW(&type) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
-        MessageBoxW(owner, L"Не удалось подготовить окно настроек.", L"LShift", MB_OK | MB_ICONERROR);
+        MessageBoxW(owner, LocalizedText(StringId::WindowPrepareError, settings.language).c_str(), L"LShift", MB_OK | MB_ICONERROR);
         return;
     }
     auto state = std::make_unique<SettingsWindow>();
+    state->language = settings.language;
     state->dpi = GetDpiForWindow(owner);
     if (state->dpi == 0) state->dpi = USER_DEFAULT_SCREEN_DPI;
-    RECT rectangle{0, 0, Scaled(*state, 450), Scaled(*state, 387)};
+    RECT rectangle{0, 0, Scaled(*state, 450), Scaled(*state, 427)};
     constexpr DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
     constexpr DWORD extended = WS_EX_CONTROLPARENT;
     AdjustWindowRectExForDpi(&rectangle, style, FALSE, extended, state->dpi);
-    const HWND window = CreateWindowExW(extended, kSettingsClass, L"Настройки LShift", style,
+    const HWND window = CreateWindowExW(extended, kSettingsClass, LocalizedText(StringId::SettingsTitle, settings.language).c_str(), style,
         CW_USEDEFAULT, CW_USEDEFAULT, rectangle.right - rectangle.left, rectangle.bottom - rectangle.top,
         owner, nullptr, type.hInstance, state.get());
     if (!window) {
-        MessageBoxW(owner, L"Не удалось открыть настройки.", L"LShift", MB_OK | MB_ICONERROR);
+        MessageBoxW(owner, LocalizedText(StringId::WindowOpenError, settings.language).c_str(), L"LShift", MB_OK | MB_ICONERROR);
         return;
     }
     state->owner = owner;

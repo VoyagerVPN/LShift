@@ -6,10 +6,12 @@
 #include <string_view>
 
 namespace lshift {
+enum class UiLanguage { English, Russian };
 struct Settings {
     bool enabled = true;
     std::uint32_t double_tap_ms = 350;
     std::uint32_t hold_ms = 250;
+    UiLanguage language = UiLanguage::English;
 };
 struct KeyEvent {
     std::uint16_t key = 0;

@@ -1,4 +1,6 @@
 #include "shell.hpp"
+#include "localization.hpp"
+#include "text_service.hpp"
 
 #include <filesystem>
 #include <array>
@@ -143,6 +145,51 @@ int main() {
         SettingsSandbox sandbox;
         Require(lshift::SettingsPath() == sandbox.path() / L"LShift" / L"settings.ini",
                 "settings must use the current user's LOCALAPPDATA");
+        Require(lshift::SystemUiLanguage(MAKELANGID(LANG_RUSSIAN, SUBLANG_DEFAULT)) == lshift::UiLanguage::Russian,
+                "Russian Windows UI selects Russian for a new profile");
+        Require(lshift::SystemUiLanguage(MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US)) == lshift::UiLanguage::English &&
+                lshift::SystemUiLanguage(MAKELANGID(LANG_FRENCH, SUBLANG_FRENCH)) == lshift::UiLanguage::English,
+                "English and unsupported Windows UI languages select English");
+        Require(lshift::LoadSettings().language ==
+                (PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_RUSSIAN ? lshift::UiLanguage::Russian : lshift::UiLanguage::English),
+                "new profile follows a supported system UI language or defaults to English");
+        {
+            SettingsSandbox legacy;
+            WriteIni(L"[Settings]\r\nEnabled=0\r\nDoubleTapMs=500\r\nHoldMs=200\r\n");
+            const auto settings = lshift::LoadSettings();
+            Require(settings.language == lshift::UiLanguage::Russian && !settings.enabled &&
+                    settings.double_tap_ms == 500 && settings.hold_ms == 200,
+                    "existing settings without a language retain the Russian interface and existing values");
+        }
+        {
+            const lshift::Settings english{true, 350, 250, lshift::UiLanguage::English};
+            Require(lshift::SaveSettings(english), "save English interface preference");
+            Require(lshift::LoadSettings().language == lshift::UiLanguage::English,
+                    "English interface preference survives reload");
+            const lshift::Settings russian{true, 350, 250, lshift::UiLanguage::Russian};
+            Require(lshift::SaveSettings(russian), "save Russian interface preference");
+            Require(lshift::LoadSettings().language == lshift::UiLanguage::Russian,
+                    "Russian interface preference survives reload");
+            Require(lshift::LocalizedText(lshift::StringId::StatusTextCorrectedKeyboardLayoutSwitched, lshift::UiLanguage::English) ==
+                    L"Text corrected, keyboard layout switched.", "English status is shown in English");
+            Require(lshift::LocalizedText(lshift::StringId::StatusTextCorrectedKeyboardLayoutSwitched, lshift::UiLanguage::Russian) ==
+                    L"Текст исправлен, язык переключён.", "Russian status stays in Russian");
+            Require(lshift::ContextFailure(3, -1, lshift::UiLanguage::English) ==
+                    L"Field context unavailable: stage 3, code -1.", "diagnostic status retains stage and error code");
+            lshift::TextRequest request;
+            request.language = lshift::UiLanguage::English;
+            Require(lshift::ProcessText(request, [] { return false; }).detail == L"The command expired.",
+                    "text operation returns an English status when English is selected");
+            request.language = lshift::UiLanguage::Russian;
+            Require(lshift::ProcessText(request, [] { return false; }).detail == L"Команда устарела.",
+                    "text operation returns a Russian status when Russian is selected");
+            for (unsigned id = 1; id <= lshift::kLastStringId; ++id) {
+                for (const auto language : {lshift::UiLanguage::English, lshift::UiLanguage::Russian}) {
+                    Require(lshift::HasLocalizedText(static_cast<lshift::StringId>(id), language),
+                            "each supported language contains every application string resource");
+                }
+            }
+        }
         const lshift::Settings selected{false, 575, 180};
         Require(lshift::SaveSettings(selected), "user can save chosen settings");
         const auto loaded = lshift::LoadSettings();

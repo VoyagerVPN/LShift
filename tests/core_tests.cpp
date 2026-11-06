@@ -25,6 +25,13 @@ int main() {
             (void)detector.Feed({key, true, first_release + 50, second_context, second_device});
             return detector.Feed({key, false, first_release + 100, second_context, second_device});
         };
+        for (const auto language : {UiLanguage::English, UiLanguage::Russian}) {
+            Gesture localized({true, 350, 250, language});
+            Require(Pair(localized), "interface language does not change the gesture");
+            Require(Convert(L"ghbdtn", Direction::ToRussian) == L"привет" &&
+                    Convert(L"привет", Direction::ToEnglish) == L"ghbdtn",
+                    "interface language does not change the keyboard layout conversion");
+        }
         Gesture walking;
         walking.SetHeld(0x57, true);
         Require(!Pair(walking), "held W prevents a gesture even before the first tap");

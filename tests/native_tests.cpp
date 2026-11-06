@@ -79,7 +79,7 @@ private:
 class Fixture {
 public:
     explicit Fixture(bool own_window = false) : own_window_(own_window),
-        previous_foreground_(GetForegroundWindow()), original_layout_(GetKeyboardLayout(GetCurrentThreadId())) {
+        original_layout_(GetKeyboardLayout(GetCurrentThreadId())) {
         WNDCLASSW type{};
         type.lpfnWndProc = HostProcedure;
         type.hInstance = GetModuleHandleW(nullptr);
@@ -99,7 +99,6 @@ public:
     ~Fixture() {
         if(own_window_ && edit_) {
             SendMessageW(edit_, WM_INPUTLANGCHANGEREQUEST, 0, reinterpret_cast<LPARAM>(original_layout_));
-            if(GetForegroundWindow() == host_ && IsWindow(previous_foreground_)) SetForegroundWindow(previous_foreground_);
         }
         if (host_ != nullptr) DestroyWindow(host_);
         UnregisterClassW(WindowClass, GetModuleHandleW(nullptr));
@@ -199,7 +198,6 @@ private:
     HWND host_ = nullptr;
     HWND edit_ = nullptr;
     bool own_window_ = false;
-    HWND previous_foreground_ = nullptr;
     HKL original_layout_ = nullptr;
 };
 

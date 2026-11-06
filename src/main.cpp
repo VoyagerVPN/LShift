@@ -1,5 +1,6 @@
 #include "core.hpp"
 #include "shell.hpp"
+#include "localization.hpp"
 #include "text_service.hpp"
 #include "diagnostics.hpp"
 #include <windows.h>
@@ -261,7 +262,7 @@ private:
         GUITHREADINFO info{sizeof(info)};
         const HWND focus = thread && GetGUIThreadInfo(thread, &info) && info.hwndFocus ? info.hwndFocus : foreground;
         const auto layout = reinterpret_cast<std::uintptr_t>(GetKeyboardLayout(GetWindowThreadProcessId(focus, nullptr)));
-        job_ = Job{{foreground, now + 1500, window_, recent_.Snapshot(), layout, focus}, epoch};
+        job_ = Job{{foreground, now + 1500, window_, recent_.Snapshot(), layout, focus, settings_.language}, epoch};
         Trace(lshift::DiagnosticEvent::Gesture, lshift::DiagnosticReason::Accepted);
         lock.unlock();
         wake_.notify_one();
@@ -324,10 +325,10 @@ private:
                 com_initialized_.store(SUCCEEDED(*apartment));
             }
             lshift::TextResult result;
-            if(FAILED(*apartment)) result = {lshift::TextStatus::Failed, L"Не удалось подготовить текстовый доступ Windows."};
+            if(FAILED(*apartment)) result = {lshift::TextStatus::Failed, lshift::LocalizedText(lshift::StringId::StatusCouldNotInitializeWindowsTextAccess, current->request.language)};
             else {
                 try { result = lshift::ProcessText(current->request, valid); }
-                catch(...) { result = {lshift::TextStatus::Failed, L"Текстовая операция отменена после ошибки."}; }
+                catch(...) { result = {lshift::TextStatus::Failed, lshift::LocalizedText(lshift::StringId::StatusTextOperationCancelledAfterAnError, current->request.language)}; }
             }
 #if LSHIFT_DIAGNOSTICS
             lshift::DiagnosticRecord recorded;
@@ -346,6 +347,7 @@ private:
             {
                 std::lock_guard lock(result_mutex_);
                 result_ = std::move(result);
+                result_language_ = current->request.language;
             }
             busy_.store(false);
             PostMessageW(window_, kResultMessage, 0, 0);
@@ -375,7 +377,7 @@ private:
                 const auto path = settings.parent_path() / L"diagnostics.jsonl";
                 if(reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", path.c_str(),
                     nullptr, nullptr, SW_SHOWNORMAL)) <= 32)
-                    MessageBoxW(window_, L"Журнал пока недоступен. Путь: LOCALAPPDATA\\LShift\\diagnostics.jsonl",
+                    MessageBoxW(window_, lshift::LocalizedText(lshift::StringId::DiagnosticsError, settings_.language).c_str(),
                                 L"LShift", MB_OK | MB_ICONINFORMATION);
             }
             return;
@@ -384,14 +386,14 @@ private:
         if(command == lshift::kOpenSettings) { Invalidate(); lshift::ShowSettings(window_, settings_); return; }
         if(command == lshift::kToggleAutostart) {
             if(!lshift::SetAutostart(!lshift::AutostartEnabled()))
-                MessageBoxW(window_, L"Не удалось изменить автозапуск текущего пользователя.", L"LShift", MB_OK | MB_ICONERROR);
+                MessageBoxW(window_, lshift::LocalizedText(lshift::StringId::AutostartChangeError, settings_.language).c_str(), L"LShift", MB_OK | MB_ICONERROR);
             return;
         }
         if(command == lshift::kToggleEnabled) {
             auto next = settings_;
             next.enabled = !next.enabled;
             if(!lshift::SaveSettings(next)) {
-                MessageBoxW(window_, L"Не удалось сохранить настройки.", L"LShift", MB_OK | MB_ICONERROR);
+                MessageBoxW(window_, lshift::LocalizedText(lshift::StringId::SaveShortError, settings_.language).c_str(), L"LShift", MB_OK | MB_ICONERROR);
                 return;
             }
             Reload();
@@ -448,7 +450,7 @@ private:
         case kResultMessage: {
             std::lock_guard lock(result_mutex_);
             if(result_) {
-                lshift::SetTrayStatus(window_, result_->detail);
+                if(result_language_ == settings_.language) lshift::SetTrayStatus(window_, result_->detail);
                 result_.reset();
             }
             return 0;
@@ -510,6 +512,7 @@ private:
     std::optional<Job> job_;
     std::mutex result_mutex_;
     std::optional<lshift::TextResult> result_;
+    lshift::UiLanguage result_language_ = lshift::UiLanguage::English;
     std::jthread worker_;
 };
 }
@@ -546,8 +549,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         if(app.Initialize(instance)) {
             if(settings) PostMessageW(app.window(), lshift::kShowSettings, 0, 0);
             result = app.Run();
-        } else MessageBoxW(nullptr, L"Не удалось запустить LShift: проверьте доступ к трею и устройствам ввода.", L"LShift", MB_OK | MB_ICONERROR);
-    } catch(...) { MessageBoxW(nullptr, L"Не удалось запустить LShift.", L"LShift", MB_OK | MB_ICONERROR); }
+        } else MessageBoxW(nullptr, lshift::LocalizedText(lshift::StringId::StartupError, lshift::LoadSettings().language).c_str(), L"LShift", MB_OK | MB_ICONERROR);
+    } catch(...) { MessageBoxW(nullptr, lshift::LocalizedText(lshift::StringId::StartupShortError, lshift::LoadSettings().language).c_str(), L"LShift", MB_OK | MB_ICONERROR); }
     CloseHandle(mutex);
     return result;
 }

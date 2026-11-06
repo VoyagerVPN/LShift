@@ -27,7 +27,7 @@ void Require(bool value, const char* message) {
 
 class TrayFixture {
 public:
-    TrayFixture() : previous_foreground_(GetForegroundWindow()) {
+    TrayFixture() {
         Require(GetCursorPos(&previous_cursor_) != FALSE, "remember pointer position");
         WNDCLASSW type{};
         type.lpfnWndProc = WindowProcedure;
@@ -41,11 +41,6 @@ public:
 
     ~TrayFixture() {
         if (owner_) KillTimer(owner_, kInspectMenu);
-        const HWND foreground = GetForegroundWindow();
-        if ((foreground == owner_ || foreground == overflow_ || foreground == outside_) &&
-            previous_foreground_ && IsWindow(previous_foreground_)) {
-            SetForegroundWindow(previous_foreground_);
-        }
         if (overflow_) DestroyWindow(overflow_);
         if (outside_) DestroyWindow(outside_);
         if (owner_) DestroyWindow(owner_);
@@ -223,7 +218,6 @@ private:
     HWND owner_ = nullptr;
     HWND overflow_ = nullptr;
     HWND outside_ = nullptr;
-    HWND previous_foreground_ = nullptr;
     POINT previous_cursor_{};
     std::exception_ptr failure_;
     ULONGLONG deadline_ = 0;

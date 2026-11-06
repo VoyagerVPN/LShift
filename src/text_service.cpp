@@ -1,4 +1,5 @@
 #include "text_service.hpp"
+#include "localization.hpp"
 #include "clipboard.hpp"
 #include "text_context.hpp"
 
@@ -48,8 +49,8 @@ struct Layouts {
     HKL russian = nullptr;
 };
 
-[[nodiscard]] TextResult Result(TextStatus status, const wchar_t* detail) {
-    return {status, detail};
+[[nodiscard]] TextResult Result(TextStatus status, std::wstring detail) {
+    return {status, std::move(detail)};
 }
 
 [[nodiscard]] bool ModifiersUp() noexcept {
@@ -190,25 +191,25 @@ struct NativeState {
 }
 
 [[nodiscard]] TextResult Toggle(const Guard& guard, HWND focus, const Layouts& layouts) {
-    if (!guard.Current()) return Result(TextStatus::Stale, L"Команда устарела.");
+    if (!guard.Current()) return Result(TextStatus::Stale, LocalizedText(StringId::StatusTheCommandExpired, guard.request.language));
     const DWORD thread = GetWindowThreadProcessId(focus, nullptr);
-    if (thread == 0) return Result(TextStatus::Unsupported, L"Поток поля недоступен.");
+    if (thread == 0) return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusFieldThreadUnavailable, guard.request.language));
     const HKL current = GetKeyboardLayout(thread);
     const HKL target = current == layouts.english ? layouts.russian :
                        current == layouts.russian ? layouts.english : nullptr;
-    if (target == nullptr) return Result(TextStatus::Unsupported, L"Активна неподдерживаемая раскладка.");
-    if (SwitchLayout(guard, focus, target)) return Result(TextStatus::Switched, L"Язык переключён.");
+    if (target == nullptr) return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusUnsupportedLayout, guard.request.language));
+    if (SwitchLayout(guard, focus, target)) return Result(TextStatus::Switched, LocalizedText(StringId::StatusKeyboardLayoutSwitched, guard.request.language));
     return Result(guard.Current() ? TextStatus::Failed : TextStatus::Stale,
-                  L"Переключение языка не подтверждено.");
+                  LocalizedText(StringId::StatusLayoutChangeUnconfirmed, guard.request.language));
 }
 
 [[nodiscard]] TextResult Converted(const Guard& guard, HWND focus, Direction direction,
                                    const Layouts& layouts) {
     const HKL target = direction == Direction::ToRussian ? layouts.russian : layouts.english;
     if (!SwitchLayout(guard, focus, target)) {
-        return Result(TextStatus::Partial, L"Текст изменён; переключение языка не подтверждено.");
+        return Result(TextStatus::Partial, LocalizedText(StringId::StatusTextChangedLayoutUnconfirmed, guard.request.language));
     }
-    return Result(TextStatus::Converted, L"Текст исправлен, язык переключён.");
+    return Result(TextStatus::Converted, LocalizedText(StringId::StatusTextCorrectedKeyboardLayoutSwitched, guard.request.language));
 }
 
 [[nodiscard]] TextResult ProcessRecent(const Guard& guard, HWND focus, const Layouts& layouts,
@@ -220,7 +221,7 @@ struct NativeState {
     NativeState before;
     if (!ReadNative(guard, focus, before)) {
         return Result(guard.Current() ? TextStatus::Unsupported : TextStatus::Stale,
-                      L"Не удалось безопасно прочитать поле.");
+                      LocalizedText(StringId::StatusCouldNotSafelyReadTheField, guard.request.language));
     }
     std::optional<TextSpan> span;
     const bool has_selection = before.start != before.end;
@@ -240,7 +241,7 @@ struct NativeState {
     if (span->length > ReplaceLimit || span->start > before.text.size() ||
         span->length > before.text.size() - span->start ||
         (!has_selection && span->start + span->length > before.start)) {
-        return Result(TextStatus::Unsupported, L"Диапазон текста слишком велик.");
+        return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusTheTextRangeIsTooLarge, guard.request.language));
     }
     const auto original = std::wstring_view(before.text).substr(span->start, span->length);
     const auto conversion = ConvertWords(original);
@@ -251,37 +252,37 @@ struct NativeState {
     std::wstring expected = before.text;
     expected.replace(span->start, span->length, replacement);
     if (replacement.size() > ReplaceLimit || expected.size() > ReadLimit) {
-        return Result(TextStatus::Unsupported, L"Результат превышает ограничение размера.");
+        return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusTheResultExceedsTheSizeLimit, guard.request.language));
     }
     NativeState current;
     if (!ReadNative(guard, focus, current) || current.text != before.text ||
         current.start != before.start || current.end != before.end) {
-        return Result(TextStatus::Stale, L"Текст или курсор изменились.");
+        return Result(TextStatus::Stale, LocalizedText(StringId::StatusTheTextOrCursorChanged, guard.request.language));
     }
     DWORD_PTR ignored = 0;
     if (!SameNativeFocus(guard, focus) || !NativeEditable(focus) || !ModifiersUp()) {
-        return Result(TextStatus::Stale, L"Условия ввода изменились.");
+        return Result(TextStatus::Stale, LocalizedText(StringId::StatusInputConditionsChanged, guard.request.language));
     }
     touched = true;
     if (!Message(guard, focus, EM_SETSEL, static_cast<WPARAM>(span->start),
                  static_cast<LPARAM>(span->start + span->length), ignored)) {
-        return Result(TextStatus::Partial, L"Изменение выделения не подтверждено.");
+        return Result(TextStatus::Partial, LocalizedText(StringId::StatusTheSelectionChangeWasNotConfirmed, guard.request.language));
     }
     NativeState selected;
     if (!ReadNative(guard, focus, selected) || selected.text != before.text ||
         selected.start != span->start || selected.end != span->start + span->length ||
         !NativeEditable(focus)) {
-        return Result(TextStatus::Partial, L"Контекст изменился после выделения; замена отменена.");
+        return Result(TextStatus::Partial, LocalizedText(StringId::StatusSelectionContextChanged, guard.request.language));
     }
     if (!Message(guard, focus, EM_REPLACESEL, TRUE,
                  reinterpret_cast<LPARAM>(replacement.c_str()), ignored)) {
-        return Result(TextStatus::Partial, L"Результат замены не подтверждён.");
+        return Result(TextStatus::Partial, LocalizedText(StringId::StatusTheReplacementWasNotConfirmed, guard.request.language));
     }
     NativeState after;
     const std::size_t expected_caret = span->start + replacement.size();
     if (!ReadNative(guard, focus, after) || after.text != expected ||
         after.start != expected_caret || after.end != expected_caret) {
-        return Result(TextStatus::Partial, L"Поле не подтвердило ожидаемый текст.");
+        return Result(TextStatus::Partial, LocalizedText(StringId::StatusExpectedTextUnconfirmed, guard.request.language));
     }
     if (!has_selection) {
         const std::size_t restored_caret = expected_caret +
@@ -291,13 +292,13 @@ struct NativeState {
                 !Message(guard, focus, EM_SETSEL, static_cast<WPARAM>(restored_caret),
                          static_cast<LPARAM>(restored_caret), ignored)) {
                 return Result(TextStatus::Partial,
-                              L"Текст исправлен; исходное смещение курсора после слова не восстановлено.");
+                              LocalizedText(StringId::StatusCursorOffsetNotRestored, guard.request.language));
             }
             NativeState restored;
             if (!ReadNative(guard, focus, restored) || restored.text != expected ||
                 restored.start != restored_caret || restored.end != restored_caret) {
                 return Result(TextStatus::Partial,
-                              L"Текст исправлен; исходное смещение курсора после слова не подтверждено.");
+                              LocalizedText(StringId::StatusCursorOffsetUnconfirmed, guard.request.language));
             }
         }
     }
@@ -428,7 +429,7 @@ void ReleaseOwnCopyKeys() noexcept {
         for (const wchar_t character : replacement) {
             const SHORT mapping = VkKeyScanExW(character, output);
             if (mapping == -1 || (HIBYTE(mapping) & ~1) != 0) {
-                return Result(TextStatus::Unsupported, L"Клавиша для исправленного текста недоступна.");
+                return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusCorrectedKeyUnavailable, guard.request.language));
             }
             const WORD key = LOBYTE(mapping);
             std::optional<bool> required_shift;
@@ -441,7 +442,7 @@ void ReleaseOwnCopyKeys() noexcept {
                     state, decoded, static_cast<int>(std::size(decoded)), 4, output);
                 if (count == 1 && decoded[0] == character) { required_shift = shifted; break; }
             }
-            if (!required_shift) return Result(TextStatus::Unsupported, L"Регистр исправленного текста не подтверждён.");
+            if (!required_shift) return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusCorrectedCaseUnconfirmed, guard.request.language));
             if (*required_shift != shift_held) {
                 keys.push_back(Key(VK_LSHIFT, !*required_shift));
                 shift_held = *required_shift;
@@ -461,14 +462,14 @@ void ReleaseOwnCopyKeys() noexcept {
     if (erase_count != 0) {
         const HKL next = direction == Direction::ToRussian ? layouts.russian : layouts.english;
         if (!SwitchLayout(guard, focus, next) || !SameLayoutFocus(guard, focus) || !ModifiersUp()) {
-            return Result(TextStatus::Stale, L"Условия ввода изменились до исправления слова.");
+            return Result(TextStatus::Stale, LocalizedText(StringId::StatusInputChangedBeforeCorrection, guard.request.language));
         }
     }
     // Запрос смены раскладки может обработать накопленный Tab или смену поля.
     // Общий HWND браузера этого не различает: повторно проверяем сам элемент
     // и текст уже после смены раскладки, непосредственно перед записью.
     if (!confirm() || !guard.Current() || !ModifiersUp()) {
-        return Result(TextStatus::Stale, L"Контекст изменился до отправки исправления.");
+        return Result(TextStatus::Stale, LocalizedText(StringId::StatusContextChangedBeforeCorrection, guard.request.language));
     }
     const UINT sent = SendInput(static_cast<UINT>(keys.size()), keys.data(), sizeof(INPUT));
     if (sent != keys.size()) {
@@ -493,7 +494,7 @@ void ReleaseOwnCopyKeys() noexcept {
                 (void)SendInput(static_cast<UINT>(std::size(release)), release, sizeof(INPUT));
             }
         }
-        return Result(TextStatus::Partial, L"Система приняла не всю команду вставки.");
+        return Result(TextStatus::Partial, LocalizedText(StringId::StatusPasteCommandIncomplete, guard.request.language));
     }
     // Вставку уже нельзя отменить. Новый набор в том же окне не отменяет смену языка;
     // смена foreground, HWND фокуса, модификаторы и общий deadline всё ещё проверяются.
@@ -503,11 +504,11 @@ void ReleaseOwnCopyKeys() noexcept {
     while (SameLayoutFocus(layout_guard, focus) && !ModifiersUp() && GetTickCount64() < until) Sleep(2);
     const HKL target = direction == Direction::ToRussian ? layouts.russian : layouts.english;
     if (!SwitchLayout(layout_guard, focus, target)) {
-        return Result(TextStatus::Partial, L"Вставка отправлена; переключение языка не подтверждено.");
+        return Result(TextStatus::Partial, LocalizedText(StringId::StatusPasteSentLayoutUnconfirmed, guard.request.language));
     }
     // SendInput подтверждает приём команды системой, но не изменение внутреннего текста редактора.
-    return Result(TextStatus::Submitted, erase_count != 0 ? L"Команда исправления отправлена, язык переключён." :
-                  L"Вставка отправлена, язык переключён.");
+    return Result(TextStatus::Submitted, erase_count != 0 ? LocalizedText(StringId::StatusCorrectionCommandSentKeyboardLayoutSwitched, guard.request.language) :
+                  LocalizedText(StringId::StatusPasteSentKeyboardLayoutSwitched, guard.request.language));
 }
 
 [[nodiscard]] bool DecodeRecent(const RecentKeys& recent, HKL layout, std::wstring& text) {
@@ -541,16 +542,16 @@ void ReleaseOwnCopyKeys() noexcept {
     const auto& recent = guard.request.recent_keys;
     if (recent.count == 0) {
         TextResult toggled = Toggle(guard, focus, layouts);
-        if (toggled.status == TextStatus::Switched) toggled.detail = L"Язык переключён; недавно набранное слово недоступно.";
+        if (toggled.status == TextStatus::Switched) toggled.detail = LocalizedText(StringId::StatusLayoutSwitchedWordUnavailable, guard.request.language);
         return toggled;
     }
     const HKL layout = GetKeyboardLayout(GetWindowThreadProcessId(focus, nullptr));
     if (reinterpret_cast<std::uintptr_t>(layout) != guard.request.recent_layout) {
-        return Result(TextStatus::Stale, L"Раскладка набранного слова изменилась.");
+        return Result(TextStatus::Stale, LocalizedText(StringId::StatusTypedWordLayoutChanged, guard.request.language));
     }
     std::wstring typed;
     if (!DecodeRecent(recent, layout, typed)) {
-        return Result(TextStatus::Unsupported, L"Последовательность набора не поддерживается.");
+        return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusTheTypingSequenceIsNotSupported, guard.request.language));
     }
     // После исправления HKL меняется только для текущего слова; предыдущие слова
     // остаются в прежней раскладке. Сверяем весь удаляемый фрагмент, включая хвост,
@@ -558,7 +559,7 @@ void ReleaseOwnCopyKeys() noexcept {
     const std::size_t erase_count = prefix.size() - word->start;
     if (erase_count > typed.size() ||
         std::wstring_view(typed).substr(typed.size() - erase_count) != prefix.substr(word->start)) {
-        return Result(TextStatus::Stale, L"Набранное слово не совпало с текстом перед курсором.");
+        return Result(TextStatus::Stale, LocalizedText(StringId::StatusTypedWordMismatch, guard.request.language));
     }
     const auto original = prefix.substr(word->start, word->length);
     const auto direction = DetectDirection(original);
@@ -573,13 +574,13 @@ void ReleaseOwnCopyKeys() noexcept {
             following == L'}' ? L'{' : following;
         if (opening.find(opener) != std::wstring_view::npos &&
             prefix.substr(word->start).find(opener) != std::wstring_view::npos) {
-            return Result(TextStatus::Unsupported, L"Парные символы рядом с курсором: исправление отменено.");
+            return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusPairedCharacters, guard.request.language));
         }
     }
     std::wstring replacement = Convert(original, *direction);
     replacement.append(prefix.substr(word->start + word->length));
     if (erase_count == 0 || erase_count > recent.keys.size() || !confirm() || !ModifiersUp()) {
-        return Result(TextStatus::Stale, L"Текст или позиция ввода изменились.");
+        return Result(TextStatus::Stale, LocalizedText(StringId::StatusTheTextOrInputPositionChanged, guard.request.language));
     }
     touched = true;
     return SubmitEdit(guard, focus, *direction, layouts, confirm, erase_count, replacement);
@@ -587,21 +588,21 @@ void ReleaseOwnCopyKeys() noexcept {
 
 [[nodiscard]] TextResult ProcessAutomation(const Guard& guard, const Layouts& layouts,
                                            bool& touched) {
-    if (!guard.Current()) return Result(TextStatus::Stale, L"Команда устарела.");
+    if (!guard.Current()) return Result(TextStatus::Stale, LocalizedText(StringId::StatusTheCommandExpired, guard.request.language));
     ComPtr<IUIAutomation> automation;
-    if (!CreateAutomation(automation)) return Result(TextStatus::Unsupported, L"UI Automation недоступен.");
+    if (!CreateAutomation(automation)) return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusUiAutomationIsUnavailable, guard.request.language));
     DWORD pid = 0;
     if (GetWindowThreadProcessId(guard.request.foreground, &pid) == 0 || pid == 0) {
-        return Result(TextStatus::Stale, L"Целевое окно недоступно.");
+        return Result(TextStatus::Stale, LocalizedText(StringId::StatusTheTargetWindowIsUnavailable, guard.request.language));
     }
     ComPtr<IUIAutomationElement> element;
     const auto focus_until = std::min<std::uint64_t>(guard.request.deadline_ms, GetTickCount64() + 300);
     for (;;) {
         element.Reset();
-        if (!guard.Current()) return Result(TextStatus::Stale, L"Команда устарела.");
+        if (!guard.Current()) return Result(TextStatus::Stale, LocalizedText(StringId::StatusTheCommandExpired, guard.request.language));
         if (SUCCEEDED(automation->GetFocusedElement(&element)) && element && EditableElement(element.Get(), pid)) break;
         if (GetTickCount64() >= focus_until) {
-            return Result(TextStatus::Unsupported, L"Фокус не подтверждён как текстовое поле.");
+            return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusFocusNotTextField, guard.request.language));
         }
         Sleep(15);
     }
@@ -609,11 +610,11 @@ void ReleaseOwnCopyKeys() noexcept {
     ComPtr<IUIAutomationTextRange> document, selection;
     if (FAILED(element->GetCurrentPatternAs(UIA_TextPatternId, IID_PPV_ARGS(&pattern))) || !pattern ||
         FAILED(pattern->get_DocumentRange(&document)) || !document || !WritableRange(document.Get())) {
-        return Result(TextStatus::Unsupported, L"Редактируемость текста не подтверждена.");
+        return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusTextNotConfirmedEditable, guard.request.language));
     }
     bool collapsed = false;
     if (!SingleSelection(pattern.Get(), selection) || !Collapsed(selection.Get(), collapsed)) {
-        return Result(TextStatus::Unsupported, L"Выделение или позиция ввода недоступны.");
+        return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusSelectionUnavailable, guard.request.language));
     }
     const bool own_selection = collapsed;
     const HWND native_focus = FocusedWindow(guard);
@@ -623,13 +624,11 @@ void ReleaseOwnCopyKeys() noexcept {
         // Берём границы поля заново, чтобы не сравнивать новый курсор со старым диапазоном.
         document.Reset();
         if (FAILED(pattern->get_DocumentRange(&document)) || !document || !WritableRange(document.Get())) {
-            return Result(TextStatus::Unsupported, L"Границы редактируемого поля недоступны.");
+            return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusTheEditableFieldBoundariesAreUnavailable, guard.request.language));
         }
         AutomationContext context;
         if (!ReadAutomationContext(document.Get(), selection.Get(), context)) {
-            return {TextStatus::Unsupported, L"Контекст поля недоступен: этап " +
-                std::to_wstring(static_cast<int>(context.stage)) + L", код " +
-                std::to_wstring(context.status) + L"."};
+            return {TextStatus::Unsupported, ContextFailure(static_cast<int>(context.stage), context.status, guard.request.language)};
         }
         const auto confirm = [&] {
             ComPtr<IUIAutomationTextRange> current, current_document;
@@ -644,23 +643,23 @@ void ReleaseOwnCopyKeys() noexcept {
         return ProcessRecent(guard, focus, layouts, context.prefix, context.following, confirm, touched);
     }
     if (!SameElement(guard, automation.Get(), element.Get(), pid) || !ModifiersUp()) {
-        return Result(TextStatus::Stale, L"Условия копирования изменились.");
+        return Result(TextStatus::Stale, LocalizedText(StringId::StatusCopyConditionsChanged, guard.request.language));
     }
     if (!WriteClipboardText(guard.request.clipboard_owner, L"")) {
-        return Result(TextStatus::Failed, L"Не удалось подготовить буфер обмена; текст не изменён.");
+        return Result(TextStatus::Failed, LocalizedText(StringId::StatusCouldNotPrepareTheClipboardText, guard.request.language));
     }
     const DWORD sentinel_sequence = GetClipboardSequenceNumber();
     if (!SameElement(guard, automation.Get(), element.Get(), pid) || !ModifiersUp()) {
-        return Result(TextStatus::Stale, L"Условия копирования изменились.");
+        return Result(TextStatus::Stale, LocalizedText(StringId::StatusCopyConditionsChanged, guard.request.language));
     }
     touched = true;
-    if (!CopySelection()) return Result(TextStatus::Partial, L"Система приняла не всю команду копирования.");
+    if (!CopySelection()) return Result(TextStatus::Partial, LocalizedText(StringId::StatusCopyCommandIncomplete, guard.request.language));
     std::wstring original;
     bool copied = false;
     const auto copy_until = std::min<std::uint64_t>(guard.request.deadline_ms, GetTickCount64() + 300);
     do {
         if (!SameElement(guard, automation.Get(), element.Get(), pid)) {
-            return Result(TextStatus::Partial, L"Фокус изменился после копирования; дальнейшие действия отменены.");
+            return Result(TextStatus::Partial, LocalizedText(StringId::StatusFocusChangedAfterCopyingFurtherActions, guard.request.language));
         }
         // Владение target PID и новая sequence подтверждают обработку Ctrl+C целевым процессом.
         if (ReadCopiedText(guard.request.clipboard_owner, pid, sentinel_sequence, original)) { copied = true; break; }
@@ -668,7 +667,7 @@ void ReleaseOwnCopyKeys() noexcept {
     } while (GetTickCount64() < copy_until);
     if (!copied) {
         // Отсутствие ACK после известного слова — ошибка копирования, а не команда смены языка.
-        return Result(TextStatus::Partial, L"Копирование не подтверждено; вставка и смена языка не отправлены.");
+        return Result(TextStatus::Partial, LocalizedText(StringId::StatusCopyUnconfirmed, guard.request.language));
     }
     const auto conversion = ConvertWords(original);
     const auto direction = conversion.last_direction;
@@ -676,16 +675,16 @@ void ReleaseOwnCopyKeys() noexcept {
     const std::wstring& replacement = conversion.text;
     if (replacement == original) return Toggle(guard, focus, layouts);
     if (replacement.empty() || replacement.size() > ReplaceLimit) {
-        return Result(TextStatus::Partial, L"Скопированный фрагмент превышает допустимый размер.");
+        return Result(TextStatus::Partial, LocalizedText(StringId::StatusCopiedTextTooLarge, guard.request.language));
     }
     if (!WaitModifiers(guard, automation.Get(), element.Get(), pid) ||
         !WriteClipboardText(guard.request.clipboard_owner, replacement)) {
-        return Result(TextStatus::Partial, L"Не удалось подготовить вставку; текст не изменён.");
+        return Result(TextStatus::Partial, LocalizedText(StringId::StatusCouldNotPreparePasteTextUnchanged, guard.request.language));
     }
     const DWORD paste_sequence = GetClipboardSequenceNumber();
     if (!SameElement(guard, automation.Get(), element.Get(), pid) || !ModifiersUp() ||
         GetClipboardOwner() != guard.request.clipboard_owner || GetClipboardSequenceNumber() != paste_sequence) {
-        return Result(TextStatus::Partial, L"Условия вставки изменились; текст не изменён.");
+        return Result(TextStatus::Partial, LocalizedText(StringId::StatusPasteConditionsChangedTextUnchanged, guard.request.language));
     }
     const auto confirm = [&] { return SameElement(guard, automation.Get(), element.Get(), pid); };
     return SubmitEdit(guard, focus, *direction, layouts, confirm);
@@ -696,17 +695,17 @@ TextResult ProcessText(const TextRequest& request, const std::function<bool()>& 
     bool touched = false;
     try {
         const Guard guard{request, is_current};
-        if (!guard.Current()) return Result(TextStatus::Stale, L"Команда устарела.");
+        if (!guard.Current()) return Result(TextStatus::Stale, LocalizedText(StringId::StatusTheCommandExpired, guard.request.language));
         const Layouts layouts = InstalledLayouts();
         if (layouts.english == nullptr || layouts.russian == nullptr) {
-            return Result(TextStatus::Unsupported, L"Нужны стандартные раскладки English US и Русская.");
+            return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusRequiredLayoutsUnavailable, guard.request.language));
         }
         const HWND focus = FocusedWindow(guard);
         const HWND layout_window = focus != nullptr ? focus : request.foreground;
         const DWORD thread = GetWindowThreadProcessId(layout_window, nullptr);
         const HKL current = thread != 0 ? GetKeyboardLayout(thread) : nullptr;
         if (current != layouts.english && current != layouts.russian) {
-            return Result(TextStatus::Unsupported, L"Активна неподдерживаемая раскладка.");
+            return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusUnsupportedLayout, guard.request.language));
         }
         if (focus != nullptr && IsNativeClass(focus)) {
             TextResult native = ProcessNative(guard, focus, layouts, touched);
@@ -717,7 +716,7 @@ TextResult ProcessText(const TextRequest& request, const std::function<bool()>& 
         return ProcessAutomation(guard, layouts, touched);
     } catch (...) {
         return Result(touched ? TextStatus::Partial : TextStatus::Failed,
-                      L"Операция прервана; результат не подтверждён.");
+                      LocalizedText(StringId::StatusOperationUnconfirmed, request.language));
     }
 }
 } // namespace lshift
