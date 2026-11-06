@@ -16,7 +16,13 @@ Press left Shift twice to fix a word or selection typed in the wrong keyboard la
 2. Type `ghbdtn` and press **left Shift twice** to turn it into `привет`. The shortcut works on selected text or the last word before the cursor.
 3. Double-click the tray icon to change the interface language, adjust the shortcut interval or enable startup with Windows.
 
-When there is no eligible text, the shortcut switches the layout. Words that mix Cyrillic and Latin letters stay as typed. [Behavior and troubleshooting (Russian)](docs/usage-notes.ru.md).
+When there is no eligible text, the shortcut switches the layout. Words that mix Cyrillic and Latin letters stay as typed.
+
+## Behavior and troubleshooting
+
+- Keep both keyboard layouts installed. If another layout switcher uses the same shortcut, close it before testing. Hover over the tray icon to see the last result.
+- LShift skips password fields, read-only fields and text that no longer matches what you typed. Some editors can briefly show intermediate text or require more than one Undo.
+- Replacing a selection through UI Automation overwrites the clipboard. Keep the EXE in a permanent folder before enabling startup with Windows.
 
 ## Build from source
 
