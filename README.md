@@ -1,39 +1,39 @@
 # LShift
 
-<img src="resources/logo.png" alt="LShift logo" width="64">
+<img src="resources/logo.png" alt="Логотип LShift" width="64">
 
-**English** · [Русский](README.ru.md)
+**Русский** · [English](README.en.md)
 
-Press left Shift twice to fix a word or selection typed in the wrong keyboard layout. LShift converts between US QWERTY and Russian ЙЦУКЕН.
+Дважды нажмите левый Shift, чтобы исправить слово или выделение, набранное в неправильной раскладке. LShift преобразует текст между English US QWERTY и Русской ЙЦУКЕН.
 
-**Windows 10/11 x64 · Portable EXE**
+**Windows 10/11 x64 · Готовый EXE**
 
-[Download LShift.exe](https://github.com/VoyagerVPN/LShift/releases/latest/download/LShift.exe) · [Discussions](https://github.com/VoyagerVPN/LShift/discussions)
+[Скачать LShift.exe](https://github.com/VoyagerVPN/LShift/releases/latest/download/LShift.exe) · [Обсуждения](https://github.com/VoyagerVPN/LShift/discussions)
 
-## Quick start
+## Быстрый старт
 
-1. Add **English (US)** and **Russian** keyboard layouts in Windows and run `LShift.exe`.
-2. Type `ghbdtn` and press **left Shift twice** to turn it into `привет`. The shortcut works on selected text or the last word before the cursor.
-3. Double-click the tray icon to change the interface language, adjust the shortcut interval or enable startup with Windows.
+1. Добавьте в Windows раскладки **English (US)** и **Русская**, затем запустите `LShift.exe`.
+2. Наберите `ghbdtn` и дважды нажмите **левый Shift**. Получится `привет`. Команда работает с выделенным текстом или с последним словом перед курсором.
+3. Дважды щёлкните по значку в трее, чтобы изменить язык интерфейса, настроить интервал нажатий или включить автозапуск.
 
-When there is no eligible text, the shortcut switches the layout. Words that mix Cyrillic and Latin letters stay as typed.
+Если подходящего текста нет, команда переключит раскладку. Слова, в которых уже смешаны кириллица и латиница, сохраняются.
 
-## Behavior and troubleshooting
+## Поведение и ограничения
 
-- Keep both keyboard layouts installed. If another layout switcher uses the same shortcut, close it before testing. Hover over the tray icon to see the last result.
-- LShift skips password fields, read-only fields and text that no longer matches what you typed. Some editors can briefly show intermediate text or require more than one Undo.
-- Replacing a selection through UI Automation overwrites the clipboard. Keep the EXE in a permanent folder before enabling startup with Windows.
+- Если тот же жест использует другой переключатель раскладки, завершите его перед проверкой. Причину последнего результата можно увидеть, наведя указатель на значок LShift.
+- LShift пропускает поля паролей, поля только для чтения и текст, который уже не совпадает с набранным. В некоторых редакторах может мелькнуть промежуточный текст, а для отмены потребуется несколько нажатий.
+- При замене выделения через UI Automation прежнее содержимое буфера обмена теряется. Перед включением автозапуска сохраните EXE в постоянной папке.
 
-## Build from source
+## Сборка из исходников
 
-Use Node.js 24 and Visual Studio 2022 or 2026 with Desktop development with C++, Windows SDK, CMake and Ninja.
+Понадобятся Node.js 24 и Visual Studio 2022 или 2026 с компонентами C++ Desktop, Windows SDK, CMake и Ninja.
 
 ```powershell
 node scripts/build.mjs
 ```
 
-The EXE is written to `dist/`. See [validation notes](docs/VALIDATION.md) and the [changelog](CHANGELOG.md).
+EXE появится в `dist/`. См. [проверки](docs/VALIDATION.md) и [список изменений](CHANGELOG.md).
 
-## License
+## Лицензия
 
-[MIT with Commons Clause 1.0](LICENSE). See [NOTICE](NOTICE) for attribution and [LICENSE](LICENSE) for restrictions on sale.
+[MIT с Commons Clause 1.0](LICENSE). Данные для атрибуции есть в [NOTICE](NOTICE), ограничения на продажу описаны в [LICENSE](LICENSE).
