@@ -16,6 +16,7 @@ struct Provider {
     std::wstring text;
     HRESULT read_status = S_OK;
     bool logical_eof = false;
+    int readonly_end = 0;
 };
 // Подмена только внешней COM-границы. Character-перемещение намеренно может
 // выйти за редактор, как у реально наблюдавшегося UIA-провайдера.
@@ -35,7 +36,9 @@ public:
     }
     HRESULT STDMETHODCALLTYPE Clone(IUIAutomationTextRange** value) override {
         if(!value) return E_POINTER;
-        *value = new Range(provider_, start_, end_, document_); return S_OK;
+        auto* clone = new Range(provider_, start_, end_, document_);
+        clone->normalized_end_ = normalized_end_;
+        *value = clone; return S_OK;
     }
     HRESULT STDMETHODCALLTYPE Compare(IUIAutomationTextRange*, BOOL*) override { return E_NOTIMPL; }
     HRESULT STDMETHODCALLTYPE CompareEndpoints(TextPatternRangeEndpoint from,
@@ -43,7 +46,7 @@ public:
         auto* range = dynamic_cast<Range*>(other);
         if(!range || !result || provider_ != range->provider_) return E_INVALIDARG;
         *result = Position(from) - range->Position(to);
-        if(provider_->logical_eof && !document_ && range->document_ && *result == 0 &&
+        if(provider_->logical_eof && !document_ && !normalized_end_ && range->document_ && *result == 0 &&
             from == TextPatternRangeEndpoint_End && to == TextPatternRangeEndpoint_End) *result = 1;
         return S_OK;
     }
@@ -51,6 +54,9 @@ public:
         IUIAutomationTextRange* other, TextPatternRangeEndpoint to) override {
         auto* range = dynamic_cast<Range*>(other);
         if(!range || provider_ != range->provider_) return E_INVALIDARG;
+        if(from == TextPatternRangeEndpoint_End && to == TextPatternRangeEndpoint_End && range->document_) {
+            normalized_end_ = true;
+        }
         Set(from, range->Position(to)); return S_OK;
     }
     HRESULT STDMETHODCALLTYPE MoveEndpointByUnit(TextPatternRangeEndpoint endpoint,
@@ -71,7 +77,14 @@ public:
     HRESULT STDMETHODCALLTYPE ExpandToEnclosingUnit(TextUnit) override { return E_NOTIMPL; }
     HRESULT STDMETHODCALLTYPE FindAttribute(TEXTATTRIBUTEID, VARIANT, BOOL, IUIAutomationTextRange**) override { return E_NOTIMPL; }
     HRESULT STDMETHODCALLTYPE FindText(BSTR, BOOL, BOOL, IUIAutomationTextRange**) override { return E_NOTIMPL; }
-    HRESULT STDMETHODCALLTYPE GetAttributeValue(TEXTATTRIBUTEID, VARIANT*) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE GetAttributeValue(TEXTATTRIBUTEID attribute, VARIANT* value) override {
+        if(attribute != UIA_IsReadOnlyAttributeId || !value) return E_INVALIDARG;
+        VariantInit(value);
+        if(start_ < provider_->readonly_end && end_ > provider_->readonly_end) return S_OK;
+        value->vt = VT_BOOL;
+        value->boolVal = start_ < provider_->readonly_end ? VARIANT_TRUE : VARIANT_FALSE;
+        return S_OK;
+    }
     HRESULT STDMETHODCALLTYPE GetBoundingRectangles(SAFEARRAY**) override { return E_NOTIMPL; }
     HRESULT STDMETHODCALLTYPE GetEnclosingElement(IUIAutomationElement**) override { return E_NOTIMPL; }
     HRESULT STDMETHODCALLTYPE Move(TextUnit, int, int*) override { return E_NOTIMPL; }
@@ -93,6 +106,7 @@ private:
     int start_;
     int end_;
     bool document_;
+    bool normalized_end_ = false;
 };
 void Require(bool value, const char* message) {
     if(!value) throw std::runtime_error(message);
@@ -148,6 +162,45 @@ int main() {
             context.stage == lshift::ContextStage::PrefixRead && context.status == E_ACCESSDENIED,
             "provider error retains exact stage and HRESULT");
         std::cout << "PASS bounded long text and provider failures\n";
+        Fixture mixed(L"quote ghbdtn  ", 14);
+        mixed.provider->readonly_end = 7006;
+        Require(lshift::WritableAutomationTarget(mixed.document.Get(), mixed.selection.Get(), L"ghbdtn  "),
+            "a writable word and its trailing spaces can be corrected in a mixed editor");
+        mixed.provider->logical_eof = true;
+        Require(lshift::ReadAutomationContext(mixed.document.Get(), mixed.selection.Get(), context) &&
+            lshift::WritableAutomationTarget(mixed.document.Get(), mixed.selection.Get(), L"ghbdtn  ", context.logical_eof),
+            "a writable word at the verified logical end of the editor can be corrected");
+        Require(!lshift::WritableAutomationTarget(mixed.document.Get(), mixed.selection.Get(), L"wrong   ", context.logical_eof),
+            "provider range text must match the actual text to be removed");
+        Require(!lshift::WritableAutomationTarget(mixed.document.Get(), mixed.selection.Get(), L" ghbdtn  ", context.logical_eof),
+            "the text to be removed cannot include a protected character");
+        Require(!lshift::WritableAutomationTarget(mixed.document.Get(), mixed.selection.Get(), L"Xquote ghbdtn  ", context.logical_eof),
+            "the word range cannot cross the editor boundary even if the text matches");
+
+        ComPtr<IUIAutomationTextRange> selected_word, selected_across_quote, selected_quote;
+        selected_word.Attach(new Range(mixed.provider, 7006, 7012));
+        selected_across_quote.Attach(new Range(mixed.provider, 7000, 7012));
+        selected_quote.Attach(new Range(mixed.provider, 7000, 7005));
+        Require(lshift::WritableAutomationTarget(mixed.document.Get(), selected_word.Get()),
+            "writable selection can be replaced in a mixed editor");
+        Require(!lshift::WritableAutomationTarget(mixed.document.Get(), selected_across_quote.Get()) &&
+            !lshift::WritableAutomationTarget(mixed.document.Get(), selected_quote.Get()),
+            "mixed and protected selections cannot be replaced");
+        std::cout << "PASS edit targets stay within writable editor text\n";
+        Fixture codex(L"Nfr ;t", 6);
+        codex.provider->logical_eof = true;
+        ComPtr<IUIAutomationTextRange> selected_all;
+        selected_all.Attach(new Range(codex.provider, 7000, 7006));
+        Require(lshift::WritableAutomationTarget(codex.document.Get(), selected_all.Get()),
+            "selecting all text accepts a logical EOF beyond the final text endpoint");
+        ComPtr<IUIAutomationTextRange> selected_outside;
+        selected_outside.Attach(new Range(codex.provider, 7000, 7007));
+        Require(!lshift::WritableAutomationTarget(codex.document.Get(), selected_outside.Get()),
+            "actual text outside the editor cannot be treated as a logical EOF");
+        codex.provider->readonly_end = 7006;
+        Require(!lshift::WritableAutomationTarget(codex.document.Get(), selected_all.Get()),
+            "normalizing a logical EOF does not permit replacement of protected text");
+        std::cout << "PASS selected logical EOF preserves text and write boundaries\n";
     } catch(const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n'; return 1;
     }

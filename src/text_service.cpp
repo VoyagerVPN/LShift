@@ -213,7 +213,8 @@ struct NativeState {
 }
 
 [[nodiscard]] TextResult ProcessRecent(const Guard& guard, HWND focus, const Layouts& layouts,
-                                      std::wstring_view prefix, wchar_t following, const std::function<bool()>& confirm,
+                                      std::wstring_view prefix, wchar_t following,
+                                      const std::function<bool(std::wstring_view)>& confirm,
                                       bool& touched);
 
 [[nodiscard]] TextResult ProcessNative(const Guard& guard, HWND focus,
@@ -226,7 +227,8 @@ struct NativeState {
     std::optional<TextSpan> span;
     const bool has_selection = before.start != before.end;
     if (!has_selection) {
-        const auto confirm = [&] {
+        const auto confirm = [&](std::wstring_view target) {
+            if (target.empty()) return true;
             NativeState current;
             return ReadNative(guard, focus, current) && current.text == before.text &&
                 current.start == before.start && current.end == before.end && NativeEditable(focus);
@@ -315,17 +317,8 @@ struct NativeState {
     return text.find(L'\0') == std::wstring::npos;
 }
 
-[[nodiscard]] bool WritableRange(IUIAutomationTextRange* range) noexcept {
-    VARIANT value;
-    VariantInit(&value);
-    const HRESULT status = range->GetAttributeValue(UIA_IsReadOnlyAttributeId, &value);
-    const bool writable = SUCCEEDED(status) && value.vt == VT_BOOL && value.boolVal == VARIANT_FALSE;
-    VariantClear(&value);
-    return writable;
-}
-
-[[nodiscard]] bool EditableElement(IUIAutomationElement* element, DWORD expected_pid) noexcept {
-    BOOL enabled = FALSE, password = TRUE, focused = FALSE;
+[[nodiscard]] bool TextElementEnabled(IUIAutomationElement* element, DWORD expected_pid) noexcept {
+    BOOL enabled = FALSE, password = TRUE;
     int process = 0;
     // Роль элемента не определяет его текстовые возможности: редактируемый
     // ComboBox или другой составной контрол тоже может предоставлять TextPattern.
@@ -333,18 +326,101 @@ struct NativeState {
     return SUCCEEDED(element->get_CurrentProcessId(&process)) &&
         process > 0 && static_cast<DWORD>(process) == expected_pid &&
         SUCCEEDED(element->get_CurrentIsEnabled(&enabled)) && enabled &&
-        SUCCEEDED(element->get_CurrentIsPassword(&password)) && !password &&
+        SUCCEEDED(element->get_CurrentIsPassword(&password)) && !password;
+}
+
+[[nodiscard]] bool EditableElement(IUIAutomationElement* element, DWORD expected_pid) noexcept {
+    BOOL focused = FALSE;
+    return TextElementEnabled(element, expected_pid) &&
         SUCCEEDED(element->get_CurrentHasKeyboardFocus(&focused)) && focused;
 }
 
+[[nodiscard]] bool ControlsFocusedElement(IUIAutomation* automation, IUIAutomationElement* candidate,
+                                         IUIAutomationElement* focused) {
+    VARIANT value{};
+    const HRESULT status = candidate->GetCurrentPropertyValue(UIA_ControllerForPropertyId, &value);
+    ComPtr<IUIAutomationElementArray> controlled;
+    if (SUCCEEDED(status) && value.vt == VT_UNKNOWN && value.punkVal) {
+        (void)value.punkVal->QueryInterface(IID_PPV_ARGS(&controlled));
+    }
+    VariantClear(&value);
+    int count = 0;
+    if (!controlled || FAILED(controlled->get_Length(&count)) || count == 0 || count > 16) return false;
+    ComPtr<IUIAutomationTreeWalker> walker;
+    if (FAILED(automation->get_RawViewWalker(&walker)) || !walker) return false;
+    ComPtr<IUIAutomationElement> ancestor = focused;
+    int focused_pid = 0;
+    if (FAILED(focused->get_CurrentProcessId(&focused_pid))) return false;
+    for (int depth = 0; depth < 8; ++depth) {
+        int ancestor_pid = 0;
+        if (FAILED(ancestor->get_CurrentProcessId(&ancestor_pid)) || ancestor_pid != focused_pid) return false;
+        for (int index = 0; index < count; ++index) {
+            ComPtr<IUIAutomationElement> target;
+            if (FAILED(controlled->GetElement(index, &target)) || !target) continue;
+            BOOL same = FALSE;
+            if (SUCCEEDED(automation->CompareElements(target.Get(), ancestor.Get(), &same)) && same) return true;
+        }
+        ComPtr<IUIAutomationElement> parent;
+        if (FAILED(walker->GetParentElement(ancestor.Get(), &parent)) || !parent) return false;
+        ancestor = parent;
+    }
+    return false;
+}
+
+[[nodiscard]] bool ResolveTextElement(IUIAutomation* automation, HWND foreground, DWORD pid,
+                                      ComPtr<IUIAutomationElement>& element) {
+    ComPtr<IUIAutomationTextPattern> pattern;
+    if (SUCCEEDED(element->GetCurrentPatternAs(UIA_TextPatternId, IID_PPV_ARGS(&pattern))) && pattern) {
+        return true;
+    }
+    // aria-activedescendant отдаёт фокус доступности подсказке. Ищем единственное
+    // поле с собственным фокусом либо стандартной связью ControllerFor с этой подсказкой.
+    VARIANT yes{};
+    yes.vt = VT_BOOL;
+    yes.boolVal = VARIANT_TRUE;
+    ComPtr<IUIAutomationCondition> text;
+    ComPtr<IUIAutomationElement> root;
+    ComPtr<IUIAutomationElementArray> matches;
+    int count = 0;
+    if (FAILED(automation->CreatePropertyCondition(UIA_IsTextPatternAvailablePropertyId, yes, &text)) ||
+        FAILED(automation->ElementFromHandle(foreground, &root)) || !root ||
+        FAILED(root->FindAll(TreeScope_Subtree, text.Get(), &matches)) || !matches ||
+        FAILED(matches->get_Length(&count)) || count > 64) return false;
+    ComPtr<IUIAutomationElement> found;
+    for (int index = 0; index < count; ++index) {
+        ComPtr<IUIAutomationElement> candidate;
+        pattern.Reset();
+        if (FAILED(matches->GetElement(index, &candidate)) || !candidate ||
+            !TextElementEnabled(candidate.Get(), pid) ||
+            FAILED(candidate->GetCurrentPatternAs(UIA_TextPatternId, IID_PPV_ARGS(&pattern))) || !pattern) continue;
+        BOOL focused = FALSE;
+        const bool own_focus = SUCCEEDED(candidate->get_CurrentHasKeyboardFocus(&focused)) && focused;
+        if (!own_focus && !ControlsFocusedElement(automation, candidate.Get(), element.Get())) continue;
+        if (found) return false;
+        found = candidate;
+    }
+    if (!found) return false;
+    element = found;
+    return true;
+}
+
 [[nodiscard]] bool SameElement(const Guard& guard, IUIAutomation* automation,
-                               IUIAutomationElement* element, DWORD pid) {
+                               IUIAutomationElement* element, DWORD pid, IUIAutomationElement* focus_proxy) {
     if (!guard.Current()) return false;
     ComPtr<IUIAutomationElement> current;
     BOOL same = FALSE;
-    return SUCCEEDED(automation->GetFocusedElement(&current)) && current &&
-        SUCCEEDED(automation->CompareElements(element, current.Get(), &same)) && same &&
-        EditableElement(current.Get(), pid) && guard.Current();
+    if (FAILED(automation->GetFocusedElement(&current)) || !current ||
+        !EditableElement(current.Get(), pid) || !TextElementEnabled(element, pid) ||
+        FAILED(automation->CompareElements(element, current.Get(), &same))) return false;
+    if (same) return guard.Current();
+    ComPtr<IUIAutomationTextPattern> current_text;
+    if (FAILED(current->GetCurrentPatternAs(UIA_TextPatternId, IID_PPV_ARGS(&current_text))) || current_text) return false;
+    BOOL same_proxy = FALSE, field_focused = FALSE;
+    if (SUCCEEDED(automation->CompareElements(focus_proxy, current.Get(), &same_proxy)) && same_proxy &&
+        SUCCEEDED(element->get_CurrentHasKeyboardFocus(&field_focused)) && field_focused) return guard.Current();
+    // Поле уже однозначно найдено для этой команды. Повторно подтверждаем его связь
+    // с текущей подсказкой без нового поиска по всему окну.
+    return ControlsFocusedElement(automation, element, current.Get()) && guard.Current();
 }
 
 [[nodiscard]] bool SingleSelection(IUIAutomationTextPattern* pattern,
@@ -403,10 +479,10 @@ void ReleaseOwnCopyKeys() noexcept {
 }
 
 [[nodiscard]] bool WaitModifiers(const Guard& guard, IUIAutomation* automation,
-                                 IUIAutomationElement* element, DWORD pid) {
+                                 IUIAutomationElement* element, DWORD pid, IUIAutomationElement* focus_proxy) {
     const auto until = std::min<std::uint64_t>(guard.request.deadline_ms, GetTickCount64() + 50);
     do {
-        if (!SameElement(guard, automation, element, pid)) return false;
+        if (!SameElement(guard, automation, element, pid, focus_proxy)) return false;
         if (ModifiersUp()) return true;
         Sleep(2);
     } while (GetTickCount64() < until);
@@ -535,13 +611,18 @@ void ReleaseOwnCopyKeys() noexcept {
 }
 
 [[nodiscard]] TextResult ProcessRecent(const Guard& guard, HWND focus, const Layouts& layouts,
-                                      std::wstring_view prefix, wchar_t following, const std::function<bool()>& confirm,
+                                      std::wstring_view prefix, wchar_t following,
+                                      const std::function<bool(std::wstring_view)>& confirm,
                                       bool& touched) {
+    const auto toggle = [&] {
+        if (confirm({})) return Toggle(guard, focus, layouts);
+        return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusTextNotConfirmedEditable, guard.request.language));
+    };
     const auto word = LastWord(prefix, prefix.size());
-    if (!word) return Toggle(guard, focus, layouts);
+    if (!word) return toggle();
     const auto& recent = guard.request.recent_keys;
     if (recent.count == 0) {
-        TextResult toggled = Toggle(guard, focus, layouts);
+        TextResult toggled = toggle();
         if (toggled.status == TextStatus::Switched) toggled.detail = LocalizedText(StringId::StatusLayoutSwitchedWordUnavailable, guard.request.language);
         return toggled;
     }
@@ -563,7 +644,7 @@ void ReleaseOwnCopyKeys() noexcept {
     }
     const auto original = prefix.substr(word->start, word->length);
     const auto direction = DetectDirection(original);
-    if (!direction) return Toggle(guard, focus, layouts);
+    if (!direction) return toggle();
     // Парные символы могут удаляться редактором вместе с символом справа от курсора.
     // В таком контексте количество Backspace не доказывает безопасный диапазон удаления.
     constexpr std::wstring_view opening = L"([{\"'";
@@ -579,11 +660,12 @@ void ReleaseOwnCopyKeys() noexcept {
     }
     std::wstring replacement = Convert(original, *direction);
     replacement.append(prefix.substr(word->start + word->length));
-    if (erase_count == 0 || erase_count > recent.keys.size() || !confirm() || !ModifiersUp()) {
+    const auto confirm_edit = [&] { return confirm(prefix.substr(word->start)); };
+    if (erase_count == 0 || erase_count > recent.keys.size() || !confirm_edit() || !ModifiersUp()) {
         return Result(TextStatus::Stale, LocalizedText(StringId::StatusTheTextOrInputPositionChanged, guard.request.language));
     }
     touched = true;
-    return SubmitEdit(guard, focus, *direction, layouts, confirm, erase_count, replacement);
+    return SubmitEdit(guard, focus, *direction, layouts, confirm_edit, erase_count, replacement);
 }
 
 [[nodiscard]] TextResult ProcessAutomation(const Guard& guard, const Layouts& layouts,
@@ -606,50 +688,68 @@ void ReleaseOwnCopyKeys() noexcept {
         }
         Sleep(15);
     }
+    const ComPtr<IUIAutomationElement> focus_proxy = element;
     ComPtr<IUIAutomationTextPattern> pattern;
     ComPtr<IUIAutomationTextRange> document, selection;
-    if (FAILED(element->GetCurrentPatternAs(UIA_TextPatternId, IID_PPV_ARGS(&pattern))) || !pattern ||
-        FAILED(pattern->get_DocumentRange(&document)) || !document || !WritableRange(document.Get())) {
+    if (!ResolveTextElement(automation.Get(), guard.request.foreground, pid, element) ||
+        FAILED(element->GetCurrentPatternAs(UIA_TextPatternId, IID_PPV_ARGS(&pattern))) || !pattern) {
         return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusTextNotConfirmedEditable, guard.request.language));
     }
     bool collapsed = false;
     if (!SingleSelection(pattern.Get(), selection) || !Collapsed(selection.Get(), collapsed)) {
         return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusSelectionUnavailable, guard.request.language));
     }
-    const bool own_selection = collapsed;
+    // GetSelection может актуализировать accessibility-дерево. Берём границы после него.
+    if (FAILED(pattern->get_DocumentRange(&document)) || !document) {
+        return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusTheEditableFieldBoundariesAreUnavailable, guard.request.language));
+    }
     const HWND native_focus = FocusedWindow(guard);
     const HWND focus = native_focus != nullptr ? native_focus : guard.request.foreground;
-    if (own_selection) {
-        // GetSelection может актуализировать accessibility-дерево после набора.
-        // Берём границы поля заново, чтобы не сравнивать новый курсор со старым диапазоном.
-        document.Reset();
-        if (FAILED(pattern->get_DocumentRange(&document)) || !document || !WritableRange(document.Get())) {
-            return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusTheEditableFieldBoundariesAreUnavailable, guard.request.language));
+    if (collapsed) {
+        // Без истории набора команда только меняет язык. Для этого достаточно
+        // подтвердить редактируемость поля, чтение текста перед курсором не требуется.
+        if (guard.request.recent_keys.count == 0 &&
+            WritableAutomationTarget(document.Get(), document.Get()) &&
+            SameElement(guard, automation.Get(), element.Get(), pid, focus_proxy.Get())) {
+            return Toggle(guard, focus, layouts);
         }
         AutomationContext context;
         if (!ReadAutomationContext(document.Get(), selection.Get(), context)) {
             return {TextStatus::Unsupported, ContextFailure(static_cast<int>(context.stage), context.status, guard.request.language)};
         }
-        const auto confirm = [&] {
+        const auto confirm = [&](std::wstring_view target) {
             ComPtr<IUIAutomationTextRange> current, current_document;
             bool is_collapsed = false;
             AutomationContext after;
-            return SameElement(guard, automation.Get(), element.Get(), pid) &&
+            return SameElement(guard, automation.Get(), element.Get(), pid, focus_proxy.Get()) &&
                 SingleSelection(pattern.Get(), current) && Collapsed(current.Get(), is_collapsed) &&
                 is_collapsed && SUCCEEDED(pattern->get_DocumentRange(&current_document)) &&
                 ReadAutomationContext(current_document.Get(), current.Get(), after) &&
-                after.prefix == context.prefix && after.following == context.following;
+                after.prefix == context.prefix && after.following == context.following &&
+                WritableAutomationTarget(current_document.Get(), current.Get(), target, after.logical_eof);
         };
         return ProcessRecent(guard, focus, layouts, context.prefix, context.following, confirm, touched);
     }
-    if (!SameElement(guard, automation.Get(), element.Get(), pid) || !ModifiersUp()) {
+    if (!WritableAutomationTarget(document.Get(), selection.Get())) {
+        return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusTextNotConfirmedEditable, guard.request.language));
+    }
+    const auto confirm_selection = [&] {
+        ComPtr<IUIAutomationTextRange> current, current_document;
+        BOOL same = FALSE;
+        return SameElement(guard, automation.Get(), element.Get(), pid, focus_proxy.Get()) &&
+            SingleSelection(pattern.Get(), current) &&
+            SUCCEEDED(selection->Compare(current.Get(), &same)) && same &&
+            SUCCEEDED(pattern->get_DocumentRange(&current_document)) &&
+            WritableAutomationTarget(current_document.Get(), current.Get());
+    };
+    if (!SameElement(guard, automation.Get(), element.Get(), pid, focus_proxy.Get()) || !ModifiersUp()) {
         return Result(TextStatus::Stale, LocalizedText(StringId::StatusCopyConditionsChanged, guard.request.language));
     }
     if (!WriteClipboardText(guard.request.clipboard_owner, L"")) {
         return Result(TextStatus::Failed, LocalizedText(StringId::StatusCouldNotPrepareTheClipboardText, guard.request.language));
     }
     const DWORD sentinel_sequence = GetClipboardSequenceNumber();
-    if (!SameElement(guard, automation.Get(), element.Get(), pid) || !ModifiersUp()) {
+    if (!SameElement(guard, automation.Get(), element.Get(), pid, focus_proxy.Get()) || !ModifiersUp()) {
         return Result(TextStatus::Stale, LocalizedText(StringId::StatusCopyConditionsChanged, guard.request.language));
     }
     touched = true;
@@ -658,7 +758,7 @@ void ReleaseOwnCopyKeys() noexcept {
     bool copied = false;
     const auto copy_until = std::min<std::uint64_t>(guard.request.deadline_ms, GetTickCount64() + 300);
     do {
-        if (!SameElement(guard, automation.Get(), element.Get(), pid)) {
+        if (!SameElement(guard, automation.Get(), element.Get(), pid, focus_proxy.Get())) {
             return Result(TextStatus::Partial, LocalizedText(StringId::StatusFocusChangedAfterCopyingFurtherActions, guard.request.language));
         }
         // Владение target PID и новая sequence подтверждают обработку Ctrl+C целевым процессом.
@@ -677,17 +777,16 @@ void ReleaseOwnCopyKeys() noexcept {
     if (replacement.empty() || replacement.size() > ReplaceLimit) {
         return Result(TextStatus::Partial, LocalizedText(StringId::StatusCopiedTextTooLarge, guard.request.language));
     }
-    if (!WaitModifiers(guard, automation.Get(), element.Get(), pid) ||
+    if (!WaitModifiers(guard, automation.Get(), element.Get(), pid, focus_proxy.Get()) ||
         !WriteClipboardText(guard.request.clipboard_owner, replacement)) {
         return Result(TextStatus::Partial, LocalizedText(StringId::StatusCouldNotPreparePasteTextUnchanged, guard.request.language));
     }
     const DWORD paste_sequence = GetClipboardSequenceNumber();
-    if (!SameElement(guard, automation.Get(), element.Get(), pid) || !ModifiersUp() ||
+    if (!SameElement(guard, automation.Get(), element.Get(), pid, focus_proxy.Get()) || !ModifiersUp() ||
         GetClipboardOwner() != guard.request.clipboard_owner || GetClipboardSequenceNumber() != paste_sequence) {
         return Result(TextStatus::Partial, LocalizedText(StringId::StatusPasteConditionsChangedTextUnchanged, guard.request.language));
     }
-    const auto confirm = [&] { return SameElement(guard, automation.Get(), element.Get(), pid); };
-    return SubmitEdit(guard, focus, *direction, layouts, confirm);
+    return SubmitEdit(guard, focus, *direction, layouts, confirm_selection);
 }
 } // namespace
 

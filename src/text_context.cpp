@@ -3,8 +3,86 @@
 #include <oleauto.h>
 #include <UIAutomation.h>
 #include <wrl/client.h>
+#include <limits>
 
 namespace lshift {
+bool WritableAutomationTarget(IUIAutomationTextRange* document,
+    IUIAutomationTextRange* selection, std::wstring_view before_caret, bool logical_eof) {
+    if (!document || !selection || before_caret.size() >= static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        return false;
+    }
+    int start = 0, end = 0;
+    if (FAILED(selection->CompareEndpoints(TextPatternRangeEndpoint_Start,
+            document, TextPatternRangeEndpoint_Start, &start)) || start < 0 ||
+        FAILED(selection->CompareEndpoints(TextPatternRangeEndpoint_End,
+            document, TextPatternRangeEndpoint_End, &end))) return false;
+
+    Microsoft::WRL::ComPtr<IUIAutomationTextRange> target;
+    if (end > 0 && !logical_eof) {
+        int collapsed = 0;
+        if (!before_caret.empty() ||
+            FAILED(selection->CompareEndpoints(TextPatternRangeEndpoint_Start,
+                selection, TextPatternRangeEndpoint_End, &collapsed)) || collapsed == 0 ||
+            FAILED(selection->Clone(&target)) || !target ||
+            FAILED(target->MoveEndpointByRange(TextPatternRangeEndpoint_End,
+                document, TextPatternRangeEndpoint_End)) ||
+            FAILED(target->CompareEndpoints(TextPatternRangeEndpoint_Start,
+                selection, TextPatternRangeEndpoint_Start, &start)) || start != 0 ||
+            FAILED(target->CompareEndpoints(TextPatternRangeEndpoint_End,
+                document, TextPatternRangeEndpoint_End, &collapsed)) || collapsed != 0) return false;
+        // Выделение до логического EOF может заканчиваться за последним текстовым endpoint.
+        // Допускаем его только при точном совпадении текста с ограниченным диапазоном.
+        constexpr int limit = 64 * 1024;
+        BSTR selected_text = nullptr, bounded_text = nullptr;
+        const HRESULT selected_status = selection->GetText(limit + 1, &selected_text);
+        const HRESULT bounded_status = target->GetText(limit + 1, &bounded_text);
+        const auto length = SysStringLen(selected_text);
+        const bool same = SUCCEEDED(selected_status) && SUCCEEDED(bounded_status) &&
+            length > 0 && length <= limit &&
+            std::wstring_view(selected_text, length) ==
+                std::wstring_view(bounded_text ? bounded_text : L"", SysStringLen(bounded_text));
+        SysFreeString(selected_text);
+        SysFreeString(bounded_text);
+        if (!same) return false;
+        selection = target.Get();
+        end = 0;
+    }
+    if (!before_caret.empty() || end > 0) {
+        int collapsed = 0;
+        if (FAILED(selection->CompareEndpoints(TextPatternRangeEndpoint_Start,
+                selection, TextPatternRangeEndpoint_End, &collapsed)) || collapsed != 0) return false;
+        // После подтверждения логического EOF используем физический конец редактора.
+        if (end > 0) {
+            if (FAILED(document->Clone(&target)) || !target ||
+                FAILED(target->MoveEndpointByRange(TextPatternRangeEndpoint_Start,
+                    document, TextPatternRangeEndpoint_End))) return false;
+        } else if (FAILED(selection->Clone(&target)) || !target) return false;
+        if (!before_caret.empty()) {
+            const int length = static_cast<int>(before_caret.size());
+            int moved = 0;
+            if (FAILED(target->MoveEndpointByUnit(TextPatternRangeEndpoint_Start, TextUnit_Character,
+                    -length, &moved)) || moved != -length ||
+                FAILED(target->CompareEndpoints(TextPatternRangeEndpoint_Start,
+                    document, TextPatternRangeEndpoint_Start, &start)) || start < 0 ||
+                FAILED(target->CompareEndpoints(TextPatternRangeEndpoint_End,
+                    end > 0 ? document : selection, TextPatternRangeEndpoint_End, &collapsed)) ||
+                collapsed != 0) return false;
+            BSTR text = nullptr;
+            const HRESULT read = target->GetText(length + 1, &text);
+            const bool matches = SUCCEEDED(read) && text &&
+                std::wstring_view(text, SysStringLen(text)) == before_caret;
+            SysFreeString(text);
+            if (!matches) return false;
+        }
+        selection = target.Get();
+    }
+    VARIANT value{};
+    const HRESULT status = selection->GetAttributeValue(UIA_IsReadOnlyAttributeId, &value);
+    const bool writable = SUCCEEDED(status) && value.vt == VT_BOOL && value.boolVal == VARIANT_FALSE;
+    VariantClear(&value);
+    return writable;
+}
+
 bool ReadAutomationContext(IUIAutomationTextRange* document,
     IUIAutomationTextRange* selection, AutomationContext& context) {
     context = {};
@@ -62,7 +140,11 @@ bool ReadAutomationContext(IUIAutomationTextRange* document,
     if(length > limit || context.prefix.find(L'\0') != std::wstring::npos) {
         context.status = HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW); return false;
     }
-    if(end > 0) { context.stage = ContextStage::Complete; return true; }
+    if(end > 0) {
+        context.logical_eof = true;
+        context.stage = ContextStage::Complete;
+        return true;
+    }
     context.stage = ContextStage::SuffixClone;
     context.status = document->Clone(&suffix);
     if(FAILED(context.status) || !suffix) return false;

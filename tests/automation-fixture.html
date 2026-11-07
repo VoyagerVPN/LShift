@@ -15,6 +15,7 @@
 <label for="plain">Обычный input</label><input id="plain" autocomplete="off" spellcheck="false">
 <label for="multi">Textarea</label><textarea id="multi" rows="5" spellcheck="false"></textarea>
 <label for="rich">Contenteditable</label><div id="rich" contenteditable="true" role="textbox" aria-multiline="true" spellcheck="false"></div>
+<ul id="suggestions" role="listbox" hidden><li id="suggestion" role="option" aria-selected="true">Test suggestion</li></ul>
 <p id="context-after"></p>
 <script>
 (() => {
@@ -24,6 +25,8 @@
   let preventPaste = false;
   let autoPair = false;
   let preventSelectAll = false;
+  let focusAfterCopy = false;
+  let shareSuggestionAfterCopy = false;
   let preventedPastes = 0;
   let allowedTextValues = null;
   let observation = {running: false, nonempty: 0, ctrlShiftLeft: 0, sources: {}, first: null};
@@ -37,6 +40,14 @@
   });
   for (const element of Object.values(fields)) element.addEventListener('paste', event => {
     if (element === active && preventPaste) { event.preventDefault(); ++preventedPastes; }
+  });
+  document.addEventListener('copy', event => {
+    if (event.target !== active || !focusAfterCopy) return;
+    if (shareSuggestionAfterCopy) {
+      fields.textarea.setAttribute('aria-controls', 'suggestions');
+      fields.textarea.setAttribute('aria-activedescendant', 'suggestion');
+    }
+    fields.textarea.focus();
   });
   // Собственный input моделирует редактор с автоматическими парными скобками.
   fields.input.addEventListener('beforeinput', event => {
@@ -106,12 +117,16 @@
   window.lshiftFixture = {
     reset({kind, text, start = text.length, end = start, password = false, readOnly = false,
       preventPaste: denyPaste = false, autoPair: pair = false, surroundingText = false,
-      preventSelectAll: denySelectAll = false, inputRole = null}) {
+      preventSelectAll: denySelectAll = false, inputRole = null, activeDescendant = false,
+      sharedSuggestionOwner = false, suggestionOwner = true, focusOnCopy = false,
+      shareSuggestionOnCopy = false, richParagraph = false, selectAllRich = false}) {
       observation.running = false;
       active = fields[kind];
       preventPaste = denyPaste;
       autoPair = pair;
       preventSelectAll = denySelectAll;
+      focusAfterCopy = focusOnCopy;
+      shareSuggestionAfterCopy = shareSuggestionOnCopy;
       document.querySelector('#context-before').textContent = surroundingText ? 'OUTSIDE '.repeat(1024) : '';
       document.querySelector('#context-after').textContent = surroundingText ? 'AFTER '.repeat(1024) : '';
       if (!active) throw new Error('unknown fixture field');
@@ -119,14 +134,35 @@
       fields.input.readOnly = readOnly;
       if (inputRole === null) fields.input.removeAttribute('role');
       else fields.input.setAttribute('role', inputRole);
-      if (active.isContentEditable) active.textContent = text;
+      document.querySelector('#suggestions').hidden = !activeDescendant;
+      fields.input.removeAttribute('aria-activedescendant');
+      fields.input.removeAttribute('aria-controls');
+      fields.textarea.removeAttribute('aria-controls');
+      fields.textarea.removeAttribute('aria-activedescendant');
+      if (focusOnCopy) fields.textarea.value = 'UNRELATED';
+      if (activeDescendant) {
+        if (suggestionOwner) fields.input.setAttribute('aria-controls', 'suggestions');
+        if (sharedSuggestionOwner) fields.textarea.setAttribute('aria-controls', 'suggestions');
+        fields.input.setAttribute('aria-activedescendant', 'suggestion');
+      }
+      if (active.isContentEditable) {
+        if (richParagraph) {
+          const paragraph = document.createElement('p');
+          paragraph.textContent = text;
+          active.replaceChildren(paragraph);
+        } else active.textContent = text;
+      }
       else active.value = text;
       active.scrollIntoView({block: 'center'});
       active.focus({preventScroll: true});
       if (active.isContentEditable) {
         if (!active.firstChild) active.append(document.createTextNode(''));
         const range = document.createRange();
-        range.setStart(active.firstChild, start); range.setEnd(active.firstChild, end);
+        if (selectAllRich) range.selectNodeContents(active);
+        else {
+          const node = richParagraph ? active.firstChild.firstChild : active.firstChild;
+          range.setStart(node, start); range.setEnd(node, end);
+        }
         const selected = getSelection(); selected.removeAllRanges(); selected.addRange(range);
       } else active.setSelectionRange(start, end);
       // Пользовательское выделение из reset — исходное состояние, не действие программы.
@@ -135,7 +171,7 @@
     },
     beginObservation,
     stopObservation() { sample('finish'); observation.running = false; },
-    oracle() { return {value: value(), ...selection(), inputEvents: [...events], commandKeys: [...keys],
+    oracle() { return {value: value(), otherValue: fields.textarea.value, ...selection(), inputEvents: [...events], commandKeys: [...keys],
       preventedPastes, observation: {...observation, sources: {...observation.sources}}, focused: document.hasFocus() && document.activeElement === active}; }
   };
 })();

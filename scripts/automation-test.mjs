@@ -152,6 +152,36 @@ const cases = [
     expectedStart: 0, caret: 6, password: true, status: 'Unsupported'},
   {name: 'input-readonly', kind: 'input', text: 'ghbdtn', start: 0, end: 6, expected: 'ghbdtn',
     expectedStart: 0, caret: 6, readOnly: true, status: 'Unsupported'},
+  {name: 'textarea-layout-without-readable-prefix', kind: 'textarea', text: 'a'.repeat(65537),
+    start: 65537, end: 65537, expected: 'a'.repeat(65537), caret: 65537, status: 'Switched'},
+  {name: 'input-readonly-layout-only', kind: 'input', text: 'ghbdtn', start: 6, end: 6,
+    expected: 'ghbdtn', caret: 6, readOnly: true, status: 'Unsupported'},
+  {name: 'input-password-layout-only', kind: 'input', text: 'ghbdtn', start: 6, end: 6,
+    expected: 'ghbdtn', caret: 6, password: true, status: 'Unsupported'},
+  {name: 'contenteditable-select-all-user-text', kind: 'contenteditable', text: 'Nfr ;t',
+    start: 0, end: 6, expected: 'Так же', caret: 6},
+  {name: 'contenteditable-paragraph-select-all-user-text', kind: 'contenteditable', text: 'Nfr ;t',
+    richParagraph: true, selectAllRich: true, start: 0, end: 6, expected: 'Так же', caret: 6},
+  {name: 'input-suggestion-layout-only', kind: 'input', inputRole: 'searchbox', activeDescendant: true,
+    text: 'ghbdtn', start: 6, end: 6, expected: 'ghbdtn', caret: 6, status: 'Switched'},
+  {name: 'input-suggestion-word', kind: 'input', inputRole: 'searchbox', activeDescendant: true,
+    text: 'ghbdtn', typed: true, tokens: wordTokens, expected: 'привет', caret: 6, roundTrip: true},
+  {...selectionCase('input-suggestion-selection', 'input', 'ghbdtn', 'привет'),
+    inputRole: 'searchbox', activeDescendant: true},
+  {...selectionCase('input-suggestion-focus-after-copy', 'input', 'ghbdtn', 'ghbdtn'),
+    inputRole: 'searchbox', activeDescendant: true, focusOnCopy: true, expectedStart: 5,
+    expectedOtherValue: 'UNRELATED', status: 'Partial'},
+  {...selectionCase('input-suggestion-shared-focus-after-copy', 'input', 'ghbdtn', 'ghbdtn'),
+    inputRole: 'searchbox', activeDescendant: true, focusOnCopy: true, shareSuggestionOnCopy: true,
+    expectedStart: 5, expectedOtherValue: 'UNRELATED', status: 'Partial'},
+  ...[
+    {name: 'readonly', readOnly: true},
+    {name: 'password', password: true},
+    {name: 'ambiguous-owner', sharedSuggestionOwner: true},
+    {name: 'unrelated-owner', suggestionOwner: false},
+  ].map(options => ({...options, name: `input-suggestion-${options.name}`, kind: 'input',
+    inputRole: 'searchbox', activeDescendant: true, text: 'ghbdtn', start: 6, end: 6,
+    expected: 'ghbdtn', caret: 6, status: 'Unsupported'})),
 ];
 const tests = cases.filter(test => selectedCase ? test.name === selectedCase : suite === 'full' ||
   (suite === 'first' ? test.name === 'input-lastword' : suite === 'recent' ? test.typed : test.name.includes('-selection-')));
@@ -383,7 +413,8 @@ try {
       }
     }
   }
-  record.passed = record.status === expectedStatus && record.valueMatches && record.caretMatches &&
+  record.otherFieldMatches = test.expectedOtherValue === undefined || oracle.otherValue === test.expectedOtherValue;
+  record.passed = record.status === expectedStatus && record.valueMatches && record.caretMatches && record.otherFieldMatches &&
     record.eventMatches && record.withinDeadline && record.layoutMatches && record.roundTripMatches &&
     record.noProgramSelection && (!converted || record.undoMatches === true);
   results.push(record);
