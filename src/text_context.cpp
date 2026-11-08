@@ -134,6 +134,7 @@ bool ReadAutomationContext(IUIAutomationTextRange* document,
         constexpr UINT kept = 4096;
         const auto skip = length > kept ? length - kept : 0;
         context.prefix.assign(value ? value + skip : L"", length - skip);
+        context.prefix_complete = skip == 0;
     }
     SysFreeString(value);
     if(FAILED(context.status)) return false;

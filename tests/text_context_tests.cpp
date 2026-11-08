@@ -149,7 +149,7 @@ int main() {
         std::cout << "PASS middle, beginning and empty editor\n";
         Fixture long_field(std::wstring(5000, L'a') + L" ghbdtn  ", 5009);
         Require(lshift::ReadAutomationContext(long_field.document.Get(), long_field.selection.Get(), context) &&
-            context.prefix.size() == 4096 && context.prefix.ends_with(L" ghbdtn  "),
+            context.prefix.size() == 4096 && context.prefix.ends_with(L" ghbdtn  ") && !context.prefix_complete,
             "long bounded prefix retains recent word instead of the beginning of the document");
         Fixture oversized(std::wstring(65537, L'a'), 65537);
         Require(!lshift::ReadAutomationContext(oversized.document.Get(), oversized.selection.Get(), context) &&

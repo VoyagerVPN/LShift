@@ -9,6 +9,8 @@
 #include <vector>
 #include <string_view>
 #include <optional>
+#include <atomic>
+#include <commctrl.h>
 
 namespace {
 constexpr int Unavailable = 77;
@@ -208,12 +210,12 @@ struct WorkerResult {
 };
 
 [[nodiscard]] WorkerResult Process(const Fixture& fixture, HDESK desktop, bool current,
-                                    const lshift::RecentKeys& recent, HKL source_layout) {
+                                    bool caps_active) {
     const HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (done == nullptr) throw std::runtime_error("CreateEventW failed");
     WorkerResult result;
     const lshift::TextRequest request{fixture.Host(), GetTickCount64() + 2500, fixture.Host(),
-                                    recent, reinterpret_cast<std::uintptr_t>(source_layout)};
+                                    caps_active};
     std::thread worker([&] {
         // Desktop назначается до COM: COM может создать вспомогательные объекты USER.
         result.desktop_ready = SetThreadDesktop(desktop) != FALSE;
@@ -280,32 +282,12 @@ struct WorkerResult {
     return nullptr;
 }
 
-[[nodiscard]] lshift::RecentKeys KnownRecent(std::wstring_view suffix, HKL layout) {
-    lshift::RecentTyping typing;
-    typing.Reset();
-    for(const wchar_t character : suffix) {
-        const SHORT mapped = VkKeyScanExW(character, layout);
-        if(mapped == -1 || (HIBYTE(mapped) & ~1U) != 0)
-            throw std::runtime_error("known fixture suffix requires unsupported modifiers");
-        const bool shifted = (HIBYTE(mapped) & 1U) != 0;
-        if(shifted) typing.Feed(VK_LSHIFT, true);
-        const auto key = static_cast<std::uint16_t>(LOBYTE(mapped));
-        typing.Feed(key, true);
-        typing.Feed(key, false);
-        if(shifted) typing.Feed(VK_LSHIFT, false);
-    }
-    auto result = typing.Snapshot();
-    result.caps_active = (GetKeyState(VK_CAPITAL) & 1) != 0;
-    return result;
-}
-
 [[nodiscard]] bool CheckCase(const char* name, Fixture& fixture, const PrivateDesktop& desktop,
                             DWORD style, const wchar_t* input, std::size_t start,
                             std::size_t end, const wchar_t* expected,
                             lshift::TextStatus status, bool current = true,
                             std::optional<std::size_t> caret = std::nullopt,
-                            ULONG_PTR expected_layout = 0x04190419ULL,
-                            std::wstring_view recent_suffix = {}) {
+                            ULONG_PTR expected_layout = 0x04190419ULL) {
     fixture.Field(style, input, start, end);
     if (!fixture.FocusMatches()) {
         std::cerr << "FAIL " << name << ": isolated foreground/focus was lost\n";
@@ -318,7 +300,7 @@ struct WorkerResult {
     }
     const HKL previous_layout = GetKeyboardLayout(GetCurrentThreadId());
     const WorkerResult result = Process(fixture, desktop.Get(), current,
-                                       KnownRecent(recent_suffix, source_layout), source_layout);
+                                       (GetKeyState(VK_CAPITAL) & 1) != 0);
     if(result.text.status == lshift::TextStatus::Submitted) {
         const auto until = GetTickCount64() + 500;
         while(fixture.FocusMatches() && fixture.Text() != expected && GetTickCount64() < until) {
@@ -357,12 +339,10 @@ struct WorkerResult {
     const HKL russian = InstalledLayout(0x04190419ULL);
     fixture.Field(0, original.data(), original.size(), original.size());
     if(!fixture.SourceLayout(english) || !fixture.FocusMatches()) return false;
-    // Один исходный журнал на всю цепочку: предыдущие слова после смены HKL не меняются.
-    const auto recent = KnownRecent(original, english);
     for(unsigned cycle = 0; cycle < 12; ++cycle) {
         const auto expected = cycle % 2 == 0 ? converted : original;
         const HKL target = cycle % 2 == 0 ? russian : english;
-        const auto result = Process(fixture, desktop.Get(), true, recent, GetKeyboardLayout(GetCurrentThreadId()));
+        const auto result = Process(fixture, desktop.Get(), true, (GetKeyState(VK_CAPITAL) & 1) != 0);
         const auto until = GetTickCount64() + 500;
         while(fixture.FocusMatches() && fixture.Text() != expected && GetTickCount64() < until) {
             MSG message{};
@@ -381,8 +361,99 @@ struct WorkerResult {
             return false;
         }
     }
-    std::cerr << "PASS 12 multiword roundtrips with unchanged original key journal\n";
+    std::cerr << "PASS 12 multiword roundtrips using actual editor text\n";
     return true;
+}
+struct QueuedGestureCheck {
+    HANDLE entered = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    HANDLE release = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    std::atomic<bool> armed{false};
+    std::atomic<bool> interrupted{false};
+    bool russian = false;
+    bool latin = false;
+    ~QueuedGestureCheck() { CloseHandle(entered); CloseHandle(release); }
+};
+LRESULT CALLBACK QueueFieldProc(HWND window, UINT message, WPARAM wp, LPARAM lp,
+                               UINT_PTR, DWORD_PTR data) {
+    auto& check = *reinterpret_cast<QueuedGestureCheck*>(data);
+    if(message == WM_GETTEXT && InSendMessage() && check.armed.exchange(false)) {
+        // Задерживается только чтение собственного поля через внешнюю Win32-границу.
+        SetEvent(check.entered);
+        WaitForSingleObject(check.release, 150);
+    }
+    if(message == WM_CHAR) {
+        check.russian = check.russian || (wp >= L'А' && wp <= L'я');
+        check.latin = check.latin || (wp >= L'A' && wp <= L'Z') || (wp >= L'a' && wp <= L'z');
+    }
+    return DefSubclassProc(window, message, wp, lp);
+}
+int CheckQueuedGesture(Fixture& fixture) {
+    if(!FindWindowW(L"LShift.Main.1", nullptr)) {
+        std::cerr << "E2E NOT EXECUTED: live queue check requires a running LShift\n";
+        return Unavailable;
+    }
+    fixture.Field(0, L"", 0, 0);
+    if(!fixture.EstablishForeground() || !fixture.SourceLayout(InstalledLayout(0x04090409ULL))) return Unavailable;
+    GUITHREADINFO info{sizeof(info)};
+    if(!GetGUIThreadInfo(GetCurrentThreadId(), &info) || !info.hwndFocus) return Unavailable;
+    QueuedGestureCheck check;
+    if(!check.entered || !check.release ||
+       !SetWindowSubclass(info.hwndFocus, QueueFieldProc, 117, reinterpret_cast<DWORD_PTR>(&check))) return Unavailable;
+    struct SubclassScope {
+        HWND window;
+        ~SubclassScope() { RemoveWindowSubclass(window, QueueFieldProc, 117); }
+    } subclass_scope{info.hwndFocus};
+    const auto send = [&](const std::vector<WORD>& keys) {
+        if(GetForegroundWindow() != fixture.Host()) { check.interrupted.store(true); return false; }
+        std::vector<INPUT> events;
+        for(const auto key : keys) for(const bool up : {false, true}) {
+            INPUT event{};
+            event.type = INPUT_KEYBOARD;
+            event.ki.wScan = static_cast<WORD>(MapVirtualKeyW(key, MAPVK_VK_TO_VSC));
+            event.ki.dwFlags = KEYEVENTF_SCANCODE | (up ? KEYEVENTF_KEYUP : 0);
+            event.ki.dwExtraInfo = 0x5453544B;
+            events.push_back(event);
+        }
+        return SendInput(static_cast<UINT>(events.size()), events.data(), sizeof(INPUT)) == events.size();
+    };
+    const auto pump = [&](unsigned ms) {
+        const auto until = GetTickCount64() + ms;
+        do {
+            if(GetForegroundWindow() != fixture.Host()) check.interrupted.store(true);
+            MSG message{};
+            while(PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+                TranslateMessage(&message); DispatchMessageW(&message);
+            }
+            Sleep(2);
+        } while(GetTickCount64() < until);
+    };
+    if(!send({'G','H','B','D','T','N'})) return Unavailable;
+    pump(80);
+    const auto original = fixture.Text();
+    check.russian = check.latin = false;
+    check.armed.store(true);
+    std::atomic<bool> second_sent{false};
+    std::thread second([&] {
+        if(WaitForSingleObject(check.entered, 1200) == WAIT_OBJECT_0) {
+            second_sent.store(send({VK_LSHIFT, VK_LSHIFT}));
+            Sleep(25);
+        }
+        SetEvent(check.release);
+    });
+    const bool first_sent = send({VK_LSHIFT, VK_LSHIFT});
+    pump(1400);
+    second.join();
+    const bool passed = first_sent && second_sent.load() && check.russian && check.latin &&
+        fixture.Text() == original && GetKeyboardLayout(GetCurrentThreadId()) == InstalledLayout(0x04090409ULL);
+    if(check.interrupted.load()) {
+        std::cerr << "E2E NOT EXECUTED: focus left the own fixture; run interrupted\n";
+        return Unavailable;
+    }
+    std::cerr << (passed ? "PASS" : "FAIL") << " a gesture during a pending read is processed after the first correction\n";
+    if(!passed) std::cerr << "  first=" << first_sent << " second=" << second_sent.load()
+        << " russian=" << check.russian << " latin=" << check.latin
+        << " restored=" << (fixture.Text() == original) << '\n';
+    return passed ? 0 : 1;
 }
 } // namespace
 
@@ -391,9 +462,11 @@ int main(int argc, char** argv) {
     try {
         bool own_window = false;
         bool stability_only = false;
+        bool live_queue = false;
         for(int index = 1; index < argc; ++index) {
             if(std::string_view(argv[index]) == "--own-window") own_window = true;
             else if(std::string_view(argv[index]) == "--stability-only") stability_only = true;
+            else if(std::string_view(argv[index]) == "--live-queue") live_queue = true;
         }
         if(!own_window) {
             std::cerr << "E2E NOT EXECUTED: the Backspace/paste input suite requires explicit --own-window; "
@@ -414,23 +487,24 @@ int main(int argc, char** argv) {
             return Unavailable;
         }
         tests_started = true;
+        if(live_queue) return CheckQueuedGesture(fixture);
         if(stability_only) return CheckRoundTrips(fixture, desktop) ? 0 : 1;
         bool passed = true;
         passed &= CheckRoundTrips(fixture, desktop);
         passed &= CheckCase("last word", fixture, desktop, 0, L"ghbdtn", 6, 6,
-                            L"привет", lshift::TextStatus::Submitted, true, 6, 0x04190419ULL, L"ghbdtn");
+                            L"привет", lshift::TextStatus::Submitted, true, 6, 0x04190419ULL);
         passed &= CheckCase("number-row word", fixture, desktop, 0, L"ghbdtn#", 7, 7,
-                            L"привет№", lshift::TextStatus::Submitted, true, 7, 0x04190419ULL, L"ghbdtn#");
+                            L"привет№", lshift::TextStatus::Submitted, true, 7, 0x04190419ULL);
         passed &= CheckCase("reverse number sign", fixture, desktop, 0, L"привет№", 7, 7,
-                            L"ghbdtn#", lshift::TextStatus::Submitted, true, 7, 0x04090409ULL, L"привет№");
+                            L"ghbdtn#", lshift::TextStatus::Submitted, true, 7, 0x04090409ULL);
         passed &= CheckCase("standalone number sign", fixture, desktop, 0, L"#", 1, 1,
-                            L"№", lshift::TextStatus::Submitted, true, 1, 0x04190419ULL, L"#");
+                            L"№", lshift::TextStatus::Submitted, true, 1, 0x04190419ULL);
         passed &= CheckCase("standalone punctuation", fixture, desktop, 0, L"?", 1, 1,
-                            L",", lshift::TextStatus::Submitted, true, 1, 0x04190419ULL, L"?");
+                            L",", lshift::TextStatus::Submitted, true, 1, 0x04190419ULL);
         passed &= CheckCase("symbols-only selection", fixture, desktop, 0, L"# @ $ ^ & .", 0, 11,
                             L"№ \" ; : ? ю", lshift::TextStatus::Converted, true, 11);
-        passed &= CheckCase("no history toggles only", fixture, desktop, 0, L"ghbdtn", 6, 6,
-                            L"ghbdtn", lshift::TextStatus::Switched, true, 6);
+        passed &= CheckCase("existing word without history", fixture, desktop, 0, L"ghbdtn", 6, 6,
+                            L"привет", lshift::TextStatus::Submitted, true, 6);
         passed &= CheckCase("selection takes priority", fixture, desktop, 0,
                             L"ghbdtn vbh", 0, 6, L"привет vbh", lshift::TextStatus::Converted);
         passed &= CheckCase("bilingual selection", fixture, desktop, 0,
@@ -450,13 +524,13 @@ int main(int argc, char** argv) {
                             lshift::TextStatus::Converted);
         passed &= CheckCase("caret after trailing spaces", fixture, desktop, 0,
                             L"ghbdtn  ", 8, 8, L"привет  ", lshift::TextStatus::Submitted,
-                            true, 8, 0x04190419ULL, L"ghbdtn  ");
+                            true, 8, 0x04190419ULL);
         passed &= CheckCase("multiline Edit", fixture, desktop, ES_MULTILINE,
                             L"first\r\nghbdtn", 13, 13, L"first\r\nпривет", lshift::TextStatus::Submitted,
-                            true, 13, 0x04190419ULL, L"ghbdtn");
+                            true, 13, 0x04190419ULL);
         passed &= CheckCase("reverse conversion with case", fixture, desktop, 0,
                             L"Привет", 6, 6, L"Ghbdtn", lshift::TextStatus::Submitted,
-                            true, 6, 0x04090409ULL, L"Привет");
+                            true, 6, 0x04090409ULL);
         passed &= CheckCase("password unchanged", fixture, desktop, ES_PASSWORD,
                             L"ghbdtn", 6, 6, L"ghbdtn", lshift::TextStatus::Unsupported);
         passed &= CheckCase("read-only unchanged", fixture, desktop, ES_READONLY,

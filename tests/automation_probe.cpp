@@ -1,5 +1,4 @@
 #include "text_service.hpp"
-#include "recent_input.hpp"
 
 #include <objbase.h>
 #include <oleauto.h>
@@ -261,23 +260,6 @@ void SetClipboardOwner(Request& request, HWND owner) {
     return number;
 }
 
-void FeedRecordedEvents(lshift::RecentTyping& recent, const wchar_t* serialized) {
-    const wchar_t* cursor = serialized;
-    unsigned count = 0;
-    while (*cursor != L'\0') {
-        if (++count > 1024 || *cursor < L'0' || *cursor > L'9') throw std::runtime_error("invalid recent key stream");
-        wchar_t* end = nullptr;
-        const unsigned long key = std::wcstoul(cursor, &end, 10);
-        if (key > 255 || *end != L':' || (end[1] != L'0' && end[1] != L'1')) {
-            throw std::runtime_error("recent stream must contain decimal-VK:0-or-1");
-        }
-        recent.Feed(static_cast<std::uint16_t>(key), end[1] == L'1');
-        cursor = end + 2;
-        if (*cursor == L'\0') break;
-        if (*cursor++ != L',' || *cursor == L'\0') throw std::runtime_error("invalid recent key separator");
-    }
-}
-
 // Только выделенная собственная fixture. Обычный SendInput проходит через
 // Windows и работающий LShift; история здесь не подменяется.
 void SendFixtureEvents(HWND fixture, const wchar_t* serialized) {
@@ -412,9 +394,6 @@ int wmain(int argc, wchar_t** argv) {
         bool diagnostic_capabilities = false;
         const wchar_t* send_events = nullptr;
         bool inspect_layout = false;
-        lshift::RecentTyping recent;
-        recent.Reset();
-        std::uintptr_t recent_layout = 0;
         std::uintptr_t set_layout = 0;
         double viewport_width = 0, viewport_height = 0, x = -1, y = -1;
         for (int index = 1; index < argc; ++index) {
@@ -434,10 +413,8 @@ int wmain(int argc, wchar_t** argv) {
                 if (timeout < 500) throw std::runtime_error("deadline must be at least 500ms");
             } else if (argument == L"--activate-own-fixture") activate = true;
             else if (argument == L"--diagnostic-capabilities") diagnostic_capabilities = true;
-            else if (argument == L"--recent-events" && index + 1 < argc) FeedRecordedEvents(recent, argv[++index]);
             else if (argument == L"--send-events" && index + 1 < argc) send_events = argv[++index];
             else if (argument == L"--inspect-layout") inspect_layout = true;
-            else if (argument == L"--recent-layout" && index + 1 < argc) recent_layout = RecordedLayout(argv[++index]);
             else if (argument == L"--set-layout" && index + 1 < argc) set_layout = RecordedLayout(argv[++index]);
             else if (argument == L"--fixture-pid" && index + 1 < argc) {
                 const double pid = Number(argv[++index]);
@@ -488,10 +465,8 @@ int wmain(int argc, wchar_t** argv) {
         if (done == nullptr) throw std::runtime_error("create worker completion event");
         lshift::TextRequest request{search.window, GetTickCount64() + timeout};
         SetClipboardOwner(request, owner.Window());
-        request.recent_keys = recent.Snapshot();
         // CDP задаёт регистр исходного текста явно; глобальный Caps для замены берём отдельно.
-        request.recent_keys.caps_active = (GetKeyState(VK_CAPITAL) & 1) != 0;
-        request.recent_layout = recent_layout != 0 ? recent_layout : static_cast<std::uintptr_t>(TargetLayout(search.window));
+        request.caps_active = (GetKeyState(VK_CAPITAL) & 1) != 0;
         lshift::TextResult result{lshift::TextStatus::Failed, L"COM MTA не инициализирован."};
         HRESULT com_status = E_FAIL;
         std::string capabilities = "null";
@@ -534,8 +509,6 @@ int wmain(int argc, wchar_t** argv) {
                   << (GetForegroundWindow() == search.window ? "true" : "false")
                   << ",\"layout_before\":" << layout_before
                   << ",\"layout_after\":" << TargetLayout(search.window)
-                  << ",\"recent_count\":" << request.recent_keys.count
-                  << ",\"recent_complete\":" << (request.recent_keys.complete ? "true" : "false")
                   << ",\"capabilities_after\":" << capabilities << "}\n";
         return 0;
     } catch (const std::exception& error) {

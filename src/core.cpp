@@ -1,5 +1,11 @@
 #include "core.hpp"
 namespace lshift {
+bool ChangesTextOrPosition(std::uint16_t key, bool down) noexcept {
+    // Отпускание клавиши и сам модификатор не меняют текст. Удерживаемые
+    // модификаторы отдельно проверяются непосредственно перед отправкой ввода.
+    return down && KeyboardChordKey(key) && key != 0x10 && key != 0x11 && key != 0x12 &&
+        key != 0x5B && key != 0x5C && !(key >= 0xA0 && key <= 0xA5);
+}
 Gesture::Gesture(Settings settings) noexcept : settings_(settings) {}
 bool Gesture::Feed(const KeyEvent& event) noexcept {
     if(!KeyboardChordKey(event.key)) { stage_ = 0; return false; }

@@ -31,6 +31,7 @@ struct KeyEvent {
            (key >= 0xDB && key <= 0xDF) || key == 0xE2 ||
            (key >= 0xF6 && key <= 0xFE);
 }
+[[nodiscard]] bool ChangesTextOrPosition(std::uint16_t key, bool down) noexcept;
 class Gesture {
 public:
     explicit Gesture(Settings settings = {}) noexcept;

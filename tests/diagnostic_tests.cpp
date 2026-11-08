@@ -16,11 +16,10 @@ int main() {
         event.event = lshift::DiagnosticEvent::Gesture;
         event.reason = lshift::DiagnosticReason::Busy;
         event.tick = 123;
-        event.count = 6;
         Require(queue.Push(event), "a rejected gesture can be queued without blocking");
         lshift::DiagnosticRecord observed;
-        Require(queue.Pop(observed) && observed.tick == 123 && observed.count == 6 &&
-            observed.reason == lshift::DiagnosticReason::Busy, "diagnostic retains reason and bounded count");
+        Require(queue.Pop(observed) && observed.tick == 123 &&
+            observed.reason == lshift::DiagnosticReason::Busy, "diagnostic retains event timestamp and reason");
         Require(!queue.Pop(observed), "empty queue does not duplicate an event");
         std::cout << "PASS diagnostic event queue\n";
 

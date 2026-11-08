@@ -212,9 +212,9 @@ struct NativeState {
     return Result(TextStatus::Converted, LocalizedText(StringId::StatusTextCorrectedKeyboardLayoutSwitched, guard.request.language));
 }
 
-[[nodiscard]] TextResult ProcessRecent(const Guard& guard, HWND focus, const Layouts& layouts,
-                                      std::wstring_view prefix, wchar_t following,
-                                      const std::function<bool(std::wstring_view)>& confirm,
+[[nodiscard]] TextResult ProcessWord(const Guard& guard, HWND focus, const Layouts& layouts,
+                                      std::wstring_view prefix, wchar_t following, bool prefix_complete,
+                                      const std::function<bool(std::wstring_view, std::wstring_view)>& confirm,
                                       bool& touched);
 
 [[nodiscard]] TextResult ProcessNative(const Guard& guard, HWND focus,
@@ -227,15 +227,16 @@ struct NativeState {
     std::optional<TextSpan> span;
     const bool has_selection = before.start != before.end;
     if (!has_selection) {
-        const auto confirm = [&](std::wstring_view target) {
-            if (target.empty()) return true;
+        const auto confirm = [&](std::wstring_view, std::wstring_view expected_prefix) {
             NativeState current;
-            return ReadNative(guard, focus, current) && current.text == before.text &&
-                current.start == before.start && current.end == before.end && NativeEditable(focus);
+            std::wstring expected(expected_prefix);
+            expected.append(std::wstring_view(before.text).substr(before.start));
+            return ReadNative(guard, focus, current) && current.text == expected &&
+                current.start == expected_prefix.size() && current.end == current.start;
         };
-        return ProcessRecent(guard, focus, layouts,
+        return ProcessWord(guard, focus, layouts,
             std::wstring_view(before.text).substr(0, before.start),
-            before.start < before.text.size() ? before.text[before.start] : L'\0', confirm, touched);
+            before.start < before.text.size() ? before.text[before.start] : L'\0', true, confirm, touched);
     }
     if (has_selection) span = TextSpan{before.start, before.end - before.start};
     else span = LastWord(before.text, before.start);
@@ -513,7 +514,7 @@ void ReleaseOwnCopyKeys() noexcept {
             std::optional<bool> required_shift;
             for (const bool shifted : {false, true}) {
                 BYTE state[256]{};
-                state[VK_CAPITAL] = guard.request.recent_keys.caps_active ? 1 : 0;
+                state[VK_CAPITAL] = guard.request.caps_active ? 1 : 0;
                 if (shifted) state[VK_SHIFT] = state[VK_LSHIFT] = 0x80;
                 wchar_t decoded[8]{};
                 const int count = ToUnicodeEx(key, MapVirtualKeyExW(key, MAPVK_VK_TO_VSC, output),
@@ -589,61 +590,20 @@ void ReleaseOwnCopyKeys() noexcept {
                   LocalizedText(StringId::StatusPasteSentKeyboardLayoutSwitched, guard.request.language));
 }
 
-[[nodiscard]] bool DecodeRecent(const RecentKeys& recent, HKL layout, std::wstring& text) {
-    if (recent.count == 0 || recent.count > recent.keys.size()) return false;
-    text.reserve(recent.count);
-    for (std::size_t index = 0; index < recent.count; ++index) {
-        const auto& key = recent.keys[index];
-        if (key.key >= 256) return false;
-        BYTE state[256]{};
-        if (key.shift) state[VK_SHIFT] = state[VK_LSHIFT] = 0x80;
-        state[VK_CAPITAL] = key.caps ? 1 : 0;
-        // VK_NUMPADn уже означает цифру. При Num Lock off Raw Input даёт
-        // навигационный VK; текущее состояние Num Lock не меняет прошлый ввод.
-        if (key.key >= VK_NUMPAD0 && key.key <= VK_NUMPAD9) state[VK_NUMLOCK] = 1;
-        wchar_t decoded[8]{};
-        const UINT scan = MapVirtualKeyExW(key.key, MAPVK_VK_TO_VSC, layout);
-        // Флаг 4 не изменяет системное состояние dead keys; перевод только на worker по жесту.
-        const int count = ToUnicodeEx(key.key, scan, state, decoded, static_cast<int>(std::size(decoded)), 4, layout);
-        // ToUnicodeEx уже использует подтверждённую RU/US-раскладку. Ограничение
-        // ASCII и кириллицей ошибочно исключало штатный символ Shift+3: №.
-        if (count != 1 || decoded[0] < L' ' || decoded[0] == L'\x7F') return false;
-        text.push_back(decoded[0]);
-    }
-    return true;
-}
-
-[[nodiscard]] TextResult ProcessRecent(const Guard& guard, HWND focus, const Layouts& layouts,
-                                      std::wstring_view prefix, wchar_t following,
-                                      const std::function<bool(std::wstring_view)>& confirm,
+[[nodiscard]] TextResult ProcessWord(const Guard& guard, HWND focus, const Layouts& layouts,
+                                      std::wstring_view prefix, wchar_t following, bool prefix_complete,
+                                      const std::function<bool(std::wstring_view, std::wstring_view)>& confirm,
                                       bool& touched) {
     const auto toggle = [&] {
-        if (confirm({})) return Toggle(guard, focus, layouts);
+        if (confirm({}, prefix)) return Toggle(guard, focus, layouts);
         return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusTextNotConfirmedEditable, guard.request.language));
     };
     const auto word = LastWord(prefix, prefix.size());
     if (!word) return toggle();
-    const auto& recent = guard.request.recent_keys;
-    if (recent.count == 0) {
-        TextResult toggled = toggle();
-        if (toggled.status == TextStatus::Switched) toggled.detail = LocalizedText(StringId::StatusLayoutSwitchedWordUnavailable, guard.request.language);
-        return toggled;
-    }
     const HKL layout = GetKeyboardLayout(GetWindowThreadProcessId(focus, nullptr));
-    if (reinterpret_cast<std::uintptr_t>(layout) != guard.request.recent_layout) {
-        return Result(TextStatus::Stale, LocalizedText(StringId::StatusTypedWordLayoutChanged, guard.request.language));
-    }
-    std::wstring typed;
-    if (!DecodeRecent(recent, layout, typed)) {
-        return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusTheTypingSequenceIsNotSupported, guard.request.language));
-    }
-    // После исправления HKL меняется только для текущего слова; предыдущие слова
-    // остаются в прежней раскладке. Сверяем весь удаляемый фрагмент, включая хвост,
-    // и требуем наличие начала целого слова в журнале, не переоценивая старые слова.
     const std::size_t erase_count = prefix.size() - word->start;
-    if (erase_count > typed.size() ||
-        std::wstring_view(typed).substr(typed.size() - erase_count) != prefix.substr(word->start)) {
-        return Result(TextStatus::Stale, LocalizedText(StringId::StatusTypedWordMismatch, guard.request.language));
+    if ((word->start == 0 && !prefix_complete) || erase_count > ReadLimit) {
+        return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusTheTextRangeIsTooLarge, guard.request.language));
     }
     const auto original = prefix.substr(word->start, word->length);
     const auto direction = DetectDirection(original,
@@ -664,12 +624,24 @@ void ReleaseOwnCopyKeys() noexcept {
     }
     std::wstring replacement = Convert(original, *direction);
     replacement.append(prefix.substr(word->start + word->length));
-    const auto confirm_edit = [&] { return confirm(prefix.substr(word->start)); };
-    if (erase_count == 0 || erase_count > recent.keys.size() || !confirm_edit() || !ModifiersUp()) {
+    const auto confirm_edit = [&] { return confirm(prefix.substr(word->start), prefix); };
+    if (erase_count == 0 || !confirm_edit() || !ModifiersUp()) {
         return Result(TextStatus::Stale, LocalizedText(StringId::StatusTheTextOrInputPositionChanged, guard.request.language));
     }
     touched = true;
-    return SubmitEdit(guard, focus, *direction, layouts, confirm_edit, erase_count, replacement);
+    TextResult result = SubmitEdit(guard, focus, *direction, layouts, confirm_edit, erase_count, replacement);
+    if(result.status != TextStatus::Submitted) return result;
+    // SendInput ставит события в очередь. Следующая команда должна увидеть уже
+    // обработанный результат первой, а не промежуточное удаление или старый текст.
+    std::wstring expected_prefix(prefix.substr(0, word->start));
+    expected_prefix.append(replacement);
+    while(guard.Current()) {
+        if(confirm({}, expected_prefix)) return result;
+        Sleep(2);
+    }
+    if(GetTickCount64() > guard.request.deadline_ms)
+        return Result(TextStatus::Partial, LocalizedText(StringId::StatusExpectedTextUnconfirmed, guard.request.language));
+    return result;
 }
 
 [[nodiscard]] TextResult ProcessAutomation(const Guard& guard, const Layouts& layouts,
@@ -710,18 +682,16 @@ void ReleaseOwnCopyKeys() noexcept {
     const HWND native_focus = FocusedWindow(guard);
     const HWND focus = native_focus != nullptr ? native_focus : guard.request.foreground;
     if (collapsed) {
-        // Без истории набора команда только меняет язык. Для этого достаточно
-        // подтвердить редактируемость поля, чтение текста перед курсором не требуется.
-        if (guard.request.recent_keys.count == 0 &&
-            WritableAutomationTarget(document.Get(), document.Get()) &&
-            SameElement(guard, automation.Get(), element.Get(), pid, focus_proxy.Get())) {
-            return Toggle(guard, focus, layouts);
-        }
         AutomationContext context;
         if (!ReadAutomationContext(document.Get(), selection.Get(), context)) {
             return {TextStatus::Unsupported, ContextFailure(static_cast<int>(context.stage), context.status, guard.request.language)};
         }
-        const auto confirm = [&](std::wstring_view target) {
+        const auto word = LastWord(context.prefix, context.prefix.size());
+        const std::wstring_view candidate_text = word ? std::wstring_view(context.prefix).substr(word->start) : std::wstring_view{};
+        if (!WritableAutomationTarget(document.Get(), selection.Get(), candidate_text, context.logical_eof)) {
+            return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusTextNotConfirmedEditable, guard.request.language));
+        }
+        const auto confirm = [&](std::wstring_view target, std::wstring_view expected_prefix) {
             ComPtr<IUIAutomationTextRange> current, current_document;
             bool is_collapsed = false;
             AutomationContext after;
@@ -729,10 +699,10 @@ void ReleaseOwnCopyKeys() noexcept {
                 SingleSelection(pattern.Get(), current) && Collapsed(current.Get(), is_collapsed) &&
                 is_collapsed && SUCCEEDED(pattern->get_DocumentRange(&current_document)) &&
                 ReadAutomationContext(current_document.Get(), current.Get(), after) &&
-                after.prefix == context.prefix && after.following == context.following &&
+                after.prefix == expected_prefix && after.following == context.following &&
                 WritableAutomationTarget(current_document.Get(), current.Get(), target, after.logical_eof);
         };
-        return ProcessRecent(guard, focus, layouts, context.prefix, context.following, confirm, touched);
+        return ProcessWord(guard, focus, layouts, context.prefix, context.following, context.prefix_complete, confirm, touched);
     }
     if (!WritableAutomationTarget(document.Get(), selection.Get())) {
         return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusTextNotConfirmedEditable, guard.request.language));
@@ -818,7 +788,15 @@ TextResult ProcessText(const TextRequest& request, const std::function<bool()>& 
                 !SameNativeFocus(guard, focus) || !NativeEditable(focus)) return native;
             // Неподтверждённые native-смещения допускают проверку UIA, запрет редактирования — нет.
         }
-        return ProcessAutomation(guard, layouts, touched);
+        TextResult result = ProcessAutomation(guard, layouts, touched);
+        // Одна повторная попытка допустима только до отправки любых изменений.
+        // Поле и диапазоны получаются заново, общий срок команды сохраняется.
+        if (!touched && guard.Current() &&
+            (result.status == TextStatus::Unsupported || result.status == TextStatus::Stale)) {
+            Sleep(15);
+            if (guard.Current()) result = ProcessAutomation(guard, layouts, touched);
+        }
+        return result;
     } catch (...) {
         return Result(touched ? TextStatus::Partial : TextStatus::Failed,
                       LocalizedText(StringId::StatusOperationUnconfirmed, request.language));

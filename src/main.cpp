@@ -38,7 +38,7 @@ public:
         stopping_.store(true);
         event_app_ = nullptr;
         if(foreground_hook_) UnhookWinEvent(foreground_hook_);
-        if(focus_hook_) UnhookWinEvent(focus_hook_);
+
         worker_.request_stop();
         wake_.notify_all();
         if(worker_.joinable()) worker_.join();
@@ -69,9 +69,7 @@ public:
         event_app_ = this;
         foreground_hook_ = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
             nullptr, ContextEvent, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
-        focus_hook_ = SetWinEventHook(EVENT_OBJECT_FOCUS, EVENT_OBJECT_FOCUS,
-            nullptr, ContextEvent, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
-        if(!raw_registered_ || !foreground_hook_ || !focus_hook_ || !taskbar_created_) return false;
+        if(!raw_registered_ || !foreground_hook_ || !taskbar_created_) return false;
         if(!RegisterTray()) return false;
         SeedHeldKeys();
         worker_ = std::jthread([this](std::stop_token stop) { Worker(stop); });
@@ -107,15 +105,14 @@ private:
     void Trace(lshift::DiagnosticEvent event, lshift::DiagnosticReason reason,
                std::uint32_t data = 0, std::uint64_t source_tick = 0) noexcept {
 #if LSHIFT_DIAGNOSTICS
-        const auto recent = recent_.Snapshot();
+
         lshift::DiagnosticRecord record;
         record.event = event;
         record.reason = reason;
         record.tick = GetTickCount64();
         record.source_tick = source_tick;
         record.epoch = generation_.load();
-        record.count = static_cast<std::uint32_t>(recent.count);
-        record.complete = recent.complete;
+
         record.data = data;
         (void)diagnostics_.Push(record);
         wake_.notify_one();
@@ -135,52 +132,26 @@ private:
     [[nodiscard]] HICON Icon() const noexcept { return settings_.enabled ? enabled_icon_.value : disabled_icon_.value; }
     void SeedHeldKeys() noexcept {
         detector_.Reset();
-        recent_.Reset((GetKeyState(VK_CAPITAL) & 1) != 0);
+        foreground_ = GetForegroundWindow();
+        caps_active_ = (GetKeyState(VK_CAPITAL) & 1) != 0;
+        caps_held_ = (GetAsyncKeyState(VK_CAPITAL) & 0x8000) != 0;
         for(std::uint16_t key = 8; key < 255; ++key) {
-            if(!lshift::KeyboardChordKey(key)) continue;
-            if(key == VK_SHIFT || key == VK_CONTROL || key == VK_MENU) continue;
+            if(!lshift::KeyboardChordKey(key) || key == VK_SHIFT || key == VK_CONTROL || key == VK_MENU) continue;
             detector_.SetHeld(key, (GetAsyncKeyState(key) & 0x8000) != 0);
-            if((key >= VK_LSHIFT && key <= VK_RMENU) || key == VK_LWIN || key == VK_RWIN) {
-                recent_.Feed(key, (GetAsyncKeyState(key) & 0x8000) != 0);
-            }
         }
     }
-    void ClearRecent() noexcept {
-#if LSHIFT_DIAGNOSTICS
-        if(recent_.Snapshot().count != 0 || busy_.load())
-            Trace(lshift::DiagnosticEvent::Reset, lshift::DiagnosticReason::Mouse);
-#endif
-        recent_.Clear();
+    void InvalidateInput() noexcept {
         generation_.fetch_add(1);
+        if(busy_.load()) Trace(lshift::DiagnosticEvent::Reset, lshift::DiagnosticReason::Mouse);
     }
     static void CALLBACK ContextEvent(HWINEVENTHOOK, DWORD event, HWND window,
-                                     LONG object, LONG child, DWORD, DWORD time) noexcept {
+                                     LONG, LONG, DWORD, DWORD) noexcept {
         auto* app = event_app_;
-        if(!app || app->stopping_.load()) return;
-        (void)child;
-        const HWND foreground = GetForegroundWindow();
-        if(event == EVENT_OBJECT_FOCUS) {
-            if(!window || GetAncestor(window, GA_ROOT) != foreground) return;
-            // Подключение accessibility тоже повторно объявляет прежний фокус.
-            // Это подсказка для проверки, а не доказательство смены поля.
-            // Native HWND и идентичность UIA-элемента проверяются перед записью;
-            // клавиатура и кнопки мыши независимо отменяют устаревшую команду.
-            app->Trace(lshift::DiagnosticEvent::FocusHint, lshift::DiagnosticReason::Focus,
-                       static_cast<std::uint32_t>(object), time);
-            app->recent_.MarkUncertain();
-            return;
-        }
-        // WinEvent доставляется асинхронно: уведомление о прежнем foreground
-        // не должно стирать набор, уже начавшийся в текущем окне.
-        if(event != EVENT_SYSTEM_FOREGROUND || window != foreground ||
-           static_cast<LONG>(time - app->last_edit_time_) < 0) return;
+        if(!app || app->stopping_.load() || event != EVENT_SYSTEM_FOREGROUND ||
+           !window || window != GetForegroundWindow() || window == app->foreground_) return;
+        app->foreground_ = window;
         app->generation_.fetch_add(1);
-#if LSHIFT_DIAGNOSTICS
-        if(app->recent_.Snapshot().count != 0 || app->busy_.load())
-            app->Trace(lshift::DiagnosticEvent::Reset,lshift::DiagnosticReason::Foreground,
-                       static_cast<std::uint32_t>(object), time);
-#endif
-        app->recent_.Clear();
+        app->Trace(lshift::DiagnosticEvent::Reset, lshift::DiagnosticReason::Foreground);
     }
     void Invalidate() noexcept {
         Trace(lshift::DiagnosticEvent::Reset, lshift::DiagnosticReason::Settings);
@@ -196,7 +167,7 @@ private:
         if(input.header.dwType == RIM_TYPEMOUSE) {
             constexpr USHORT buttons = RI_MOUSE_LEFT_BUTTON_DOWN | RI_MOUSE_RIGHT_BUTTON_DOWN |
                 RI_MOUSE_MIDDLE_BUTTON_DOWN | RI_MOUSE_BUTTON_4_DOWN | RI_MOUSE_BUTTON_5_DOWN;
-            if((input.data.mouse.usButtonFlags & buttons) != 0) ClearRecent();
+            if((input.data.mouse.usButtonFlags & buttons) != 0) InvalidateInput();
             return;
         }
         if(input.header.dwType != RIM_TYPEKEYBOARD) return;
@@ -207,7 +178,12 @@ private:
         if(vk == VK_SHIFT) vk = key.MakeCode == 0x2A ? VK_LSHIFT : VK_RSHIFT;
         if(vk == VK_CONTROL) vk = (key.Flags & RI_KEY_E0) != 0 ? VK_RCONTROL : VK_LCONTROL;
         if(vk == VK_MENU) vk = (key.Flags & RI_KEY_E0) != 0 ? VK_RMENU : VK_LMENU;
-        const auto epoch = generation_.fetch_add(1) + 1;
+        const bool down = (key.Flags & RI_KEY_BREAK) == 0;
+        if(lshift::ChangesTextOrPosition(vk, down)) generation_.fetch_add(1);
+        if(vk == VK_CAPITAL) {
+            if(down && !caps_held_) caps_active_ = !caps_active_;
+            caps_held_ = down;
+        }
         const auto now = GetTickCount64();
         const auto age = static_cast<DWORD>(now) - static_cast<DWORD>(GetMessageTime());
         if(age > 250) {
@@ -215,30 +191,15 @@ private:
             SeedHeldKeys(); return;
         }
         const HWND foreground = GetForegroundWindow();
-        const auto device = reinterpret_cast<std::uintptr_t>(input.header.hDevice);
-        if(foreground != recent_foreground_ || (recent_device_ != 0 && recent_device_ != device)) {
-#if LSHIFT_DIAGNOSTICS
-            if(recent_.Snapshot().count != 0 || busy_.load())
-                Trace(lshift::DiagnosticEvent::Reset, foreground != recent_foreground_ ?
-                    lshift::DiagnosticReason::Foreground : lshift::DiagnosticReason::Device);
-#endif
-            recent_.Clear();
-            recent_foreground_ = foreground;
-            recent_device_ = device;
+        if(foreground != foreground_) {
+            foreground_ = foreground;
+            generation_.fetch_add(1);
         }
-        if((key.Flags & RI_KEY_BREAK) == 0 && vk != VK_LSHIFT && vk != VK_RSHIFT && vk != VK_CAPITAL) {
-            last_edit_time_ = static_cast<DWORD>(now) - age;
-        }
-        if(settings_.enabled) recent_.Feed(vk, (key.Flags & RI_KEY_BREAK) == 0);
-        else recent_.Clear();
+        const auto epoch = generation_.load();
         const bool triggered = detector_.Feed({vk, (key.Flags & RI_KEY_BREAK) == 0, now - age,
                                               reinterpret_cast<std::uintptr_t>(foreground),
                                               reinterpret_cast<std::uintptr_t>(input.header.hDevice)});
         if(!triggered || !foreground) return;
-        if(busy_.load()) {
-            Trace(lshift::DiagnosticEvent::Gesture, lshift::DiagnosticReason::Busy);
-            return;
-        }
         // Проверка только готового жеста дополняет Raw Input состоянием клавиш до запуска.
         for(int key_code = 8; key_code < 255; ++key_code) {
             if(!lshift::KeyboardChordKey(static_cast<std::uint16_t>(key_code))) continue;
@@ -253,16 +214,12 @@ private:
             Trace(lshift::DiagnosticEvent::Gesture, lshift::DiagnosticReason::OwnWindow);
             return;
         }
-        std::unique_lock lock(jobs_mutex_, std::try_to_lock);
-        if(!lock || job_) {
-            Trace(lshift::DiagnosticEvent::Gesture, lshift::DiagnosticReason::QueueBusy);
-            return;
-        }
+        std::unique_lock lock(jobs_mutex_);
         const DWORD thread = GetWindowThreadProcessId(foreground, nullptr);
         GUITHREADINFO info{sizeof(info)};
         const HWND focus = thread && GetGUIThreadInfo(thread, &info) && info.hwndFocus ? info.hwndFocus : foreground;
-        const auto layout = reinterpret_cast<std::uintptr_t>(GetKeyboardLayout(GetWindowThreadProcessId(focus, nullptr)));
-        job_ = Job{{foreground, now + 1500, window_, recent_.Snapshot(), layout, focus, settings_.language}, epoch};
+        // Храним не более одного ожидающего запроса; более новый заменяет ожидающий.
+        job_ = Job{{foreground, now + 1500, window_, caps_active_, focus, settings_.language}, epoch};
         Trace(lshift::DiagnosticEvent::Gesture, lshift::DiagnosticReason::Accepted);
         lock.unlock();
         wake_.notify_one();
@@ -335,9 +292,9 @@ private:
             recorded.event = lshift::DiagnosticEvent::Result;
             recorded.tick = GetTickCount64();
             recorded.epoch = current->epoch;
-            recorded.count = static_cast<std::uint32_t>(current->request.recent_keys.count);
-            recorded.complete = current->request.recent_keys.complete;
-            recorded.layout = static_cast<std::uint32_t>(current->request.recent_layout);
+
+            recorded.layout = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(
+                GetKeyboardLayout(GetWindowThreadProcessId(current->request.foreground, nullptr))));
             recorded.status = static_cast<std::uint32_t>(result.status);
             recorded.elapsed = static_cast<std::uint32_t>(recorded.tick - started);
             recorded.data = static_cast<std::uint32_t>(generation_.load());
@@ -488,15 +445,15 @@ private:
     OwnedIcon disabled_icon_;
     lshift::Settings settings_;
     lshift::Gesture detector_;
-    lshift::RecentTyping recent_;
+    bool caps_active_ = false;
+    bool caps_held_ = false;
 #if LSHIFT_DIAGNOSTICS
     lshift::DiagnosticQueue diagnostics_;
 #endif
-    HWND recent_foreground_ = nullptr;
-    std::uintptr_t recent_device_ = 0;
-    DWORD last_edit_time_ = 0;
+    HWND foreground_ = nullptr;
+
     HWINEVENTHOOK foreground_hook_ = nullptr;
-    HWINEVENTHOOK focus_hook_ = nullptr;
+
     static inline App* event_app_ = nullptr;
     UINT taskbar_created_ = 0;
     bool raw_registered_ = false;

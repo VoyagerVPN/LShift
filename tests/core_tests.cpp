@@ -5,6 +5,13 @@ using namespace lshift;
 void Require(bool value, const char* message) { if(!value) throw std::runtime_error(message); }
 int main() {
     try {
+        Require(!ChangesTextOrPosition(0x41, false) && !ChangesTextOrPosition(0xA0, true) &&
+                !ChangesTextOrPosition(0xA2, false) && !ChangesTextOrPosition(0xAF, true),
+                "key releases, modifier taps and media commands do not cancel a text command");
+        Require(ChangesTextOrPosition(0x41, true) && ChangesTextOrPosition(0x08, true) &&
+                ChangesTextOrPosition(0x09, true) && ChangesTextOrPosition(0x25, true) &&
+                ChangesTextOrPosition(0x14, true),
+                "typing, deletion, navigation and case-state changes invalidate a text command");
         Gesture gesture;
         Require(!gesture.Feed({0xA0, true, 100, 1, 1}), "first press must pass through");
         Require(!gesture.Feed({0xA0, false, 150, 1, 1}), "one tap is not a command");

@@ -18,12 +18,14 @@ Press left Shift twice to fix a word or selection typed in the wrong keyboard la
 
 When there is no eligible text, the shortcut switches the layout. Words that mix Cyrillic and Latin letters stay as typed.
 
+The last word is read from the field itself. It can be corrected after pasting, clicking or returning to the editor; no keystroke history is required.
+
 Symbols follow the same physical keys as letters: `ghbdtn# → привет№`, `@ → "`, `$ → ;`. For symbols without letters, the field's current keyboard layout determines the direction.
 
 ## Behavior and troubleshooting
 
 - Keep both keyboard layouts installed. If another layout switcher uses the same shortcut, close it before testing. Hover over the tray icon to see the last result.
-- LShift skips password fields, read-only fields and text that no longer matches what you typed. Some editors can briefly show intermediate text or require more than one Undo.
+- LShift skips password and read-only fields. Replacement is cancelled if the text, caret or focused field changes. Some editors can briefly show intermediate text or require more than one Undo.
 - Replacing a selection through UI Automation overwrites the clipboard. Keep the EXE in a permanent folder before enabling startup with Windows.
 
 ## Build from source

@@ -13,6 +13,7 @@ struct AutomationContext {
     ContextStage stage = ContextStage::None;
     HRESULT status = S_OK;
     bool logical_eof = false;
+    bool prefix_complete = true;
 };
 // Чтение подтверждённого поля без изменения выделения, фокуса и содержимого.
 [[nodiscard]] bool ReadAutomationContext(IUIAutomationTextRange* document,

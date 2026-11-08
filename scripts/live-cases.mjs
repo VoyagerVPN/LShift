@@ -2,6 +2,8 @@
 // CDP используется только для подготовки собственного редактора и чтения результата.
 export async function runLiveCases({evaluate, probe, env, browserPid, pause, repeat = 1, filter = null}) {
   const cases = [
+    ...['input','textarea','contenteditable'].map(kind => ({kind,name:'existing-after-click',seed:'ghbdtn',tokens:[],
+      focusCycle:'mouse',then:[],before:'ghbdtn',expected:'привет',roundTrip:true})),
     {kind:'input',name:'number-sign-word',tokens:[...'ghbdtn','#'],before:'ghbdtn#',expected:'привет№',roundTrip:true},
     {kind:'input',name:'number-sign-alone',tokens:['#'],before:'#',expected:'№',roundTrip:true},
     {kind:'input',name:'number-row-symbols',tokens:[...'ghbdtn@#$%^&*'],before:'ghbdtn@#$%^&*',expected:'привет"№;%:?*',roundTrip:true},
@@ -30,7 +32,7 @@ export async function runLiveCases({evaluate, probe, env, browserPid, pause, rep
     {kind, name:'mouse-away-back-retype', tokens:[...'old'], focusCycle:'mouse', then:['<Ctrl+A>','<Backspace>',...'ghbdtn'], expected:'привет'},
     {kind, name:'alt-tab-back-retype', tokens:[...'old'], focusCycle:'alt-tab', then:['<Ctrl+A>','<Backspace>',...'ghbdtn'], expected:'привет'},
     {kind, name:'user-selection', tokens:[...'ghbdtn','<Ctrl+A>'], selected:true, before:'ghbdtn', expected:'привет'},
-    {kind, name:'uncertain-partial-guard', seed:'old', tokens:['<Backspace>',...'ghbdtn'], before:'olghbdtn', expected:'olghbdtn', unchanged:true},
+    {kind, name:'uncertain-partial-word', seed:'old', tokens:['<Backspace>',...'ghbdtn'], before:'olghbdtn', expected:'щдпривет'},
     {kind, name:'fast-focus-type', tokens:[...'ghbdtn'], focusDelay:0, expected:'привет'},
     {kind, name:'focus-during-command', tokens:[...'ghbdtn'], cancelWithTab:true},
   ])];
@@ -57,7 +59,7 @@ export async function runLiveCases({evaluate, probe, env, browserPid, pause, rep
     await probe(env,browserPid,['--activate-own-fixture','--viewport-width',String(g.width),'--viewport-height',String(g.height),'--point-x',String(g.x),'--point-y',String(g.y)]);
   };
   const results = [];
-  for(const test of cases.filter(item=>filter===null||`${item.kind}/${item.name}`.includes(filter))) for(let attempt=1;attempt<=repeat;++attempt) {
+  for(const test of cases.filter(item=>filter===null||filter.split(',').some(part=>`${item.kind}/${item.name}`.includes(part)))) for(let attempt=1;attempt<=repeat;++attempt) {
     const initial={kind:test.kind,text:test.seed??'',inputRole:test.inputRole??null};
     await evaluate(`window.lshiftFixture.reset(${JSON.stringify(initial)})`);
     await activate(test.kind);

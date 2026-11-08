@@ -1,6 +1,5 @@
 #pragma once
 #include "core.hpp"
-#include "recent_input.hpp"
 #include <windows.h>
 #include <functional>
 #include <string>
@@ -10,8 +9,7 @@ struct TextRequest {
     HWND foreground = nullptr;
     std::uint64_t deadline_ms = 0;
     HWND clipboard_owner = nullptr;
-    RecentKeys recent_keys{};
-    std::uintptr_t recent_layout = 0;
+    bool caps_active = false;
     HWND focus = nullptr;
     UiLanguage language = UiLanguage::English;
 };

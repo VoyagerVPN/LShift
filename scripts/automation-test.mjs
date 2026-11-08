@@ -23,7 +23,7 @@ const deadline = Number(option('--deadline-ms', '1500'));
 if (!Number.isInteger(deadline) || deadline < 500 || deadline > 8000) throw new Error('--deadline-ms must be 500..8000');
 const suite = option('--suite', 'first');
 if (!['first', 'selection', 'recent', 'full'].includes(suite)) throw new Error('--suite must be first, selection, recent or full');
-const selectedCase = option('--case', null);
+const selectedCase = option('--case', null)?.split(',');
 const legacyProbe = args.includes('--legacy-probe');
 function typedEvents(tokens, layout = 0x04090409) {
   const events = [];
@@ -85,6 +85,7 @@ const longRussian = 'привет '.repeat(585) + 'п';
 const selectionCase = (name, kind, original, converted) => ({name, kind, text: `KEEP ${original} TAIL`,
   start: 5, end: 5 + original.length, expected: `KEEP ${converted} TAIL`, caret: 5 + converted.length});
 const cases = [
+  ...['input','textarea','contenteditable'].map(kind => ({name:`${kind}-empty-field`,kind,text:'',expected:'',caret:0,status:'Switched'})),
   {name:'contenteditable-number-sign-word',kind:'contenteditable',text:'ghbdtn#',typed:true,tokens:[...'ghbdtn#'],
     expected:'привет№',caret:7,roundTrip:true},
   ...['input','textarea','contenteditable'].flatMap(kind => [
@@ -119,7 +120,7 @@ const cases = [
   ]),
   {name: 'contenteditable-select-all-denied-guard', kind: 'contenteditable', text: 'olghbdtn', typed: true,
     tokens: [...'old', '<Ctrl+A>', '<Backspace>', ...wordTokens], preventSelectAll: true,
-    expected: 'olghbdtn', caret: 8, status: 'Stale'},
+    expected: 'щдпривет', caret: 8, wordUnits: 8},
   ...['input', 'textarea', 'contenteditable'].map(kind => ({name: `${kind}-word-then-space`, kind,
     text: 'ghbdtn ', typed: true, tokens: [...'ghbdtn '], expected: 'привет ', caret: 7})),
   {name: 'contenteditable-space-after-pause', kind: 'contenteditable', text: 'ghbdtn ', typed: true,
@@ -136,7 +137,7 @@ const cases = [
     {name: `${kind}-erase-word-overrun`, kind, text: 'ghbdtn', typed: true,
       tokens: [...'old', ...Array(4).fill('<Backspace>'), ...wordTokens], expected: 'привет', caret: 6},
     {name: `${kind}-uncertain-partial-word`, kind, seed: 'old', text: 'olghbdtn', typed: true,
-      tokens: ['<Backspace>', ...wordTokens], expected: 'olghbdtn', caret: 8, status: 'Stale'},
+      tokens: ['<Backspace>', ...wordTokens], expected: 'щдпривет', caret: 8, wordUnits: 8},
     {name: `${kind}-numpad-word`, kind, text: 'ghbdtn1', typed: true,
       tokens: [...wordTokens, '<Num1>'], expected: 'привет1', caret: 7},
     {name: `${kind}-digit-word`, kind, text: 'ghbdtn1', typed: true,
@@ -149,12 +150,16 @@ const cases = [
     autoPair: true, start: 7, expected: 'ghbdtn()', caret: 7, status: 'Unsupported'},
   {name: 'contenteditable-repeated-word', kind: 'contenteditable', seed: 'ghbdtn ', text: 'ghbdtn ghbdtn', typed: true, tokens: wordTokens,
     expected: 'ghbdtn привет', caret: 13},
-  {name: 'input-no-history', kind: 'input', text: 'ghbdtn', typed: true, tokens: wordTokens, journal: false,
-    expected: 'ghbdtn', caret: 6, status: 'Switched'},
-  {name: 'input-stale-journal', kind: 'input', text: 'ghbdtn', typed: true, tokens: wordTokens, journalTokens: [...'abcdef'],
-    expected: 'ghbdtn', caret: 6, status: 'Stale'},
+  {name: 'input-no-history', kind: 'input', text: 'ghbdtn', typed: true, tokens: wordTokens,
+    expected: 'привет', caret: 6},
+  ...['input', 'textarea', 'contenteditable'].map(kind => ({name: `${kind}-existing-word`, kind,
+    text: 'KEEP ghbdtn', expected: 'KEEP привет', caret: 11, wordUnits: 6})),
+  {name: 'textarea-existing-long-word', kind: 'textarea', text: 'a'.repeat(160),
+    expected: 'ф'.repeat(160), caret: 160, wordUnits: 160},
+  {name: 'textarea-truncated-word', kind: 'textarea', text: 'a'.repeat(5000),
+    expected: 'a'.repeat(5000), caret: 5000, status: 'Unsupported'},
   {name: 'input-navigation-invalidates', kind: 'input', text: 'ghbdtn', typed: true, tokens: [...wordTokens, '<ArrowLeft>'],
-    start: 5, expected: 'ghbdtn', caret: 5, status: 'Switched'},
+    start: 5, expected: 'привеn', caret: 5},
   selectionCase('textarea-selection-1007', 'textarea', shortLatin, shortRussian),
   selectionCase('contenteditable-selection-1007', 'contenteditable', shortLatin, shortRussian),
   selectionCase('textarea-selection-4096', 'textarea', longLatin, longRussian),
@@ -181,7 +186,7 @@ const cases = [
   {name: 'input-readonly', kind: 'input', text: 'ghbdtn', start: 0, end: 6, expected: 'ghbdtn',
     expectedStart: 0, caret: 6, readOnly: true, status: 'Unsupported'},
   {name: 'textarea-layout-without-readable-prefix', kind: 'textarea', text: 'a'.repeat(65537),
-    start: 65537, end: 65537, expected: 'a'.repeat(65537), caret: 65537, status: 'Switched'},
+    start: 65537, end: 65537, expected: 'a'.repeat(65537), caret: 65537, status: 'Unsupported'},
   {name: 'input-readonly-layout-only', kind: 'input', text: 'ghbdtn', start: 6, end: 6,
     expected: 'ghbdtn', caret: 6, readOnly: true, status: 'Unsupported'},
   {name: 'input-password-layout-only', kind: 'input', text: 'ghbdtn', start: 6, end: 6,
@@ -191,7 +196,7 @@ const cases = [
   {name: 'contenteditable-paragraph-select-all-user-text', kind: 'contenteditable', text: 'Nfr ;t',
     richParagraph: true, selectAllRich: true, start: 0, end: 6, expected: 'Так же', caret: 6},
   {name: 'input-suggestion-layout-only', kind: 'input', inputRole: 'searchbox', activeDescendant: true,
-    text: 'ghbdtn', start: 6, end: 6, expected: 'ghbdtn', caret: 6, status: 'Switched'},
+    text: 'ghbdtn', start: 6, end: 6, expected: 'привет', caret: 6},
   {name: 'input-suggestion-word', kind: 'input', inputRole: 'searchbox', activeDescendant: true,
     text: 'ghbdtn', typed: true, tokens: wordTokens, expected: 'привет', caret: 6, roundTrip: true},
   {...selectionCase('input-suggestion-selection', 'input', 'ghbdtn', 'привет'),
@@ -211,7 +216,7 @@ const cases = [
     inputRole: 'searchbox', activeDescendant: true, text: 'ghbdtn', start: 6, end: 6,
     expected: 'ghbdtn', caret: 6, status: 'Unsupported'})),
 ];
-const tests = cases.filter(test => selectedCase ? test.name === selectedCase : suite === 'full' ||
+const tests = cases.filter(test => selectedCase ? selectedCase.includes(test.name) : suite === 'full' ||
   (suite === 'first' ? test.name === 'input-lastword' : suite === 'recent' ? test.typed : test.name.includes('-selection-')));
 if (tests.length === 0) throw new Error('Unknown --case');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -324,7 +329,7 @@ try {
     let result;
     try { result = await page.call('Runtime.evaluate', {expression, returnByValue: true, awaitPromise: true}); }
     catch (error) { throw new Error(`${step}: ${error.message}`); }
-    if (result.exceptionDetails) throw new Error('Own fixture JavaScript oracle failed');
+    if (result.exceptionDetails) throw new Error(`${step}: own fixture JavaScript failed: ${result.exceptionDetails.exception?.description ?? result.exceptionDetails.text}`);
     return result.result.value;
   }
   if (args.includes('--health-only')) {
@@ -344,11 +349,10 @@ try {
   const initial = test.typed ? {...test, text: seed, start: test.seedStart ?? seed.length, end: test.seedStart ?? seed.length} : test;
   const focused = await evaluate(`window.lshiftFixture.reset(${JSON.stringify(initial)})`);
   if (!focused.focused) throw new Error('Own input did not receive DOM focus');
-  const sourceLayout = test.sourceLayout ?? test.recentLayout ?? 0x04090409;
+  const sourceLayout = test.sourceLayout ?? 0x04090409;
   const preparationProbe = legacyProbe ? path.join(cache, 'build/automation_probe.exe') : probePath;
   const prepared = await probe(env, browserPid, ['--set-layout', String(sourceLayout)], preparationProbe);
   if (prepared.status !== 'Prepared' || prepared.layout_after !== sourceLayout) throw new Error('Own fixture source layout was not prepared');
-  let recentArguments = [];
   if (test.typed) {
     for (const event of typedEvents(test.tokens, sourceLayout)) {
       await page.call('Input.dispatchKeyEvent', {type: event.down ? 'keyDown' : 'keyUp', key: event.key, code: event.code,
@@ -358,21 +362,17 @@ try {
     if (typed.value !== test.text || typed.start !== (test.start ?? test.text.length) || typed.start !== typed.end) {
       throw new Error(`Actual fixture typing did not match specification: ${test.name}`);
     }
-    if (!legacyProbe && test.journal !== false) {
-      const stream = typedEvents(test.journalTokens ?? test.tokens, sourceLayout).map(event => `${event.vk}:${event.down ? 1 : 0}`).join(',');
-      recentArguments = ['--recent-events', stream, '--recent-layout', String(sourceLayout)];
-    }
     await evaluate(`window.lshiftFixture.beginObservation(${JSON.stringify({allowedValues: [test.text, test.expected]})})`);
   }
   await pause(test.waitBeforeGestureMs ?? 150);
-  const outcome = await probe(env, browserPid, recentArguments);
+  const outcome = await probe(env, browserPid, []);
   await pause(250);
   const oracle = await evaluate('window.lshiftFixture.oracle()');
   const expectedStatus = test.status ?? 'Submitted';
   const converted = expectedStatus === 'Submitted';
   const record = {name: test.name, attempt, ...outcome, valueMatches: oracle.value === test.expected,
     kind: test.kind, selectionLength: (test.end ?? test.start ?? test.text.length) - (test.start ?? test.text.length),
-    actuallyTyped: Boolean(test.typed), journalPassed: recentArguments.length > 0,
+    actuallyTyped: Boolean(test.typed),
     coldAccessibility: results.length === 0,
     observedStart: oracle.start, observedEnd: oracle.end,
     commandKeys: oracle.commandKeys,
@@ -404,10 +404,10 @@ try {
   if (converted && outcome.status === 'Submitted' && record.valueMatches) {
     let expectedUndo = test.text;
     if (test.roundTrip) {
-      // Повторный жест использует те же физические VK, но уже текущую HKL целевого окна.
+      // Повторная команда заново читает фактический текст поля.
       record.roundTripMatches = true;
       for (let trip = 0; trip < (test.roundTrips ?? 1); ++trip) {
-      const reverse = await probe(env, browserPid, recentArguments.slice(0, 2));
+      const reverse = await probe(env, browserPid, []);
       await pause(250);
       const reversed = await evaluate('window.lshiftFixture.oracle()');
       record.roundTripMatches &&= reverse.status === 'Submitted' && reverse.layout_after === (trip % 2 === 0 ? sourceLayout : (test.targetLayout ?? 0x04190419)) &&

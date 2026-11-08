@@ -16,12 +16,10 @@ struct DiagnosticRecord {
     std::uint64_t tick = 0;
     std::uint64_t source_tick = 0;
     std::uint64_t epoch = 0;
-    std::uint32_t count = 0;
     std::uint32_t layout = 0;
     std::uint32_t elapsed = 0;
     std::uint32_t status = 0;
     std::uint32_t data = 0;
-    bool complete = true;
     bool temporary_executable = false;
 };
 class DiagnosticQueue {
