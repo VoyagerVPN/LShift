@@ -590,6 +590,19 @@ void ReleaseOwnCopyKeys() noexcept {
                   LocalizedText(StringId::StatusPasteSentKeyboardLayoutSwitched, guard.request.language));
 }
 
+// Перед следующей командой подтверждаем применение уже отправленного ввода.
+[[nodiscard]] TextResult WaitForAppliedText(const Guard& guard, TextResult result,
+                                           const std::function<bool()>& applied) {
+    if(result.status != TextStatus::Submitted) return result;
+    while(guard.Current()) {
+        if(applied()) return result;
+        Sleep(2);
+    }
+    if(GetTickCount64() > guard.request.deadline_ms)
+        return Result(TextStatus::Partial, LocalizedText(StringId::StatusExpectedTextUnconfirmed, guard.request.language));
+    return result;
+}
+
 [[nodiscard]] TextResult ProcessWord(const Guard& guard, HWND focus, const Layouts& layouts,
                                       std::wstring_view prefix, wchar_t following, bool prefix_complete,
                                       const std::function<bool(std::wstring_view, std::wstring_view)>& confirm,
@@ -630,18 +643,9 @@ void ReleaseOwnCopyKeys() noexcept {
     }
     touched = true;
     TextResult result = SubmitEdit(guard, focus, *direction, layouts, confirm_edit, erase_count, replacement);
-    if(result.status != TextStatus::Submitted) return result;
-    // SendInput ставит события в очередь. Следующая команда должна увидеть уже
-    // обработанный результат первой, а не промежуточное удаление или старый текст.
     std::wstring expected_prefix(prefix.substr(0, word->start));
     expected_prefix.append(replacement);
-    while(guard.Current()) {
-        if(confirm({}, expected_prefix)) return result;
-        Sleep(2);
-    }
-    if(GetTickCount64() > guard.request.deadline_ms)
-        return Result(TextStatus::Partial, LocalizedText(StringId::StatusExpectedTextUnconfirmed, guard.request.language));
-    return result;
+    return WaitForAppliedText(guard, std::move(result), [&] { return confirm({}, expected_prefix); });
 }
 
 [[nodiscard]] TextResult ProcessAutomation(const Guard& guard, const Layouts& layouts,
@@ -762,7 +766,18 @@ void ReleaseOwnCopyKeys() noexcept {
         GetClipboardOwner() != guard.request.clipboard_owner || GetClipboardSequenceNumber() != paste_sequence) {
         return Result(TextStatus::Partial, LocalizedText(StringId::StatusPasteConditionsChangedTextUnchanged, guard.request.language));
     }
-    return SubmitEdit(guard, focus, *direction, layouts, confirm_selection);
+    TextResult result = SubmitEdit(guard, focus, *direction, layouts, confirm_selection);
+    const std::wstring_view expected_tail = std::wstring_view(replacement).substr(
+        replacement.size() > ReadLimit ? replacement.size() - ReadLimit : 0);
+    return WaitForAppliedText(guard, std::move(result), [&] {
+        ComPtr<IUIAutomationTextRange> current, current_document;
+        bool collapsed_now = false;
+        AutomationContext after;
+        return SameElement(guard, automation.Get(), element.Get(), pid, focus_proxy.Get()) &&
+            SingleSelection(pattern.Get(), current) && Collapsed(current.Get(), collapsed_now) && collapsed_now &&
+            SUCCEEDED(pattern->get_DocumentRange(&current_document)) &&
+            ReadAutomationContext(current_document.Get(), current.Get(), after) && after.prefix.ends_with(expected_tail);
+    });
 }
 } // namespace
 
