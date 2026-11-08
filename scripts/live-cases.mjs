@@ -2,6 +2,11 @@
 // CDP используется только для подготовки собственного редактора и чтения результата.
 export async function runLiveCases({evaluate, probe, env, browserPid, pause, repeat = 1, filter = null}) {
   const cases = [
+    {kind:'input',name:'number-sign-word',tokens:[...'ghbdtn','#'],before:'ghbdtn#',expected:'привет№',roundTrip:true},
+    {kind:'input',name:'number-sign-alone',tokens:['#'],before:'#',expected:'№',roundTrip:true},
+    {kind:'input',name:'number-row-symbols',tokens:[...'ghbdtn@#$%^&*'],before:'ghbdtn@#$%^&*',expected:'привет"№;%:?*',roundTrip:true},
+    {kind:'contenteditable',name:'question-mark-word',tokens:[...'ghbdtn','?'],before:'ghbdtn?',expected:'привет,',roundTrip:true},
+    {kind:'contenteditable',name:'punctuation-alone',tokens:['.'],before:'.',expected:'ю',roundTrip:true},
     {kind:'input', name:'combobox-word', inputRole:'combobox', tokens:[...'ghbdtn'], expected:'привет', roundTrip:true},
     {kind:'input', name:'combobox-selection', inputRole:'combobox', tokens:[...'ghbdtn','<Ctrl+A>'], selected:true, before:'ghbdtn', expected:'привет'},
     {kind:'input', name:'combobox-digit', inputRole:'combobox', tokens:[...'ghbdtn','<Num1>'], before:'ghbdtn1', expected:'привет1'},
@@ -40,6 +45,9 @@ export async function runLiveCases({evaluate, probe, env, browserPid, pause, rep
     if (token === '<Shift>') return stroke(160);
     if (/^<Num[0-9]>$/.test(token)) return stroke(96+Number(token[4]));
     if (/^[a-z0-9 ]$/.test(token)) return stroke(token === ' ' ? 32 : token.toUpperCase().charCodeAt(0));
+    const shiftedSymbols = {'@':50,'#':51,'$':52,'%':53,'^':54,'&':55,'*':56,'?':191};
+    if (token in shiftedSymbols) return [[160,1],...stroke(shiftedSymbols[token]),[160,0]];
+    if (token === '.') return stroke(190);
     throw new Error(`unsupported own live-fixture token: ${token}`);
   });
   const send = tokens => probe(env,browserPid,['--send-events',events(tokens).map(pair=>pair.join(':')).join(',')]);
@@ -96,7 +104,7 @@ export async function runLiveCases({evaluate, probe, env, browserPid, pause, rep
     if(test.roundTrip&&record.valueMatches) {
       await send(['<Shift>','<Shift>']);await pause(350);
       const reverse=await evaluate('window.lshiftFixture.oracle()');
-      record.roundTripMatches=reverse.value===(upperPlain ? 'GHBDTN' : 'ghbdtn');
+      record.roundTripMatches=reverse.value===(upperPlain ? 'GHBDTN' : expectedBefore);
     }
     record.passed=record.valueMatches&&record.caretMatches&&record.layoutMatches&&record.noProgramSelection&&record.roundTripMatches;
     results.push(record);console.log(JSON.stringify(record));

@@ -18,6 +18,8 @@ Press left Shift twice to fix a word or selection typed in the wrong keyboard la
 
 When there is no eligible text, the shortcut switches the layout. Words that mix Cyrillic and Latin letters stay as typed.
 
+Symbols follow the same physical keys as letters: `ghbdtn# → привет№`, `@ → "`, `$ → ;`. For symbols without letters, the field's current keyboard layout determines the direction.
+
 ## Behavior and troubleshooting
 
 - Keep both keyboard layouts installed. If another layout switcher uses the same shortcut, close it before testing. Hover over the tray icon to see the last result.

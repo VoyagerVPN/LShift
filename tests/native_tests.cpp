@@ -419,6 +419,16 @@ int main(int argc, char** argv) {
         passed &= CheckRoundTrips(fixture, desktop);
         passed &= CheckCase("last word", fixture, desktop, 0, L"ghbdtn", 6, 6,
                             L"привет", lshift::TextStatus::Submitted, true, 6, 0x04190419ULL, L"ghbdtn");
+        passed &= CheckCase("number-row word", fixture, desktop, 0, L"ghbdtn#", 7, 7,
+                            L"привет№", lshift::TextStatus::Submitted, true, 7, 0x04190419ULL, L"ghbdtn#");
+        passed &= CheckCase("reverse number sign", fixture, desktop, 0, L"привет№", 7, 7,
+                            L"ghbdtn#", lshift::TextStatus::Submitted, true, 7, 0x04090409ULL, L"привет№");
+        passed &= CheckCase("standalone number sign", fixture, desktop, 0, L"#", 1, 1,
+                            L"№", lshift::TextStatus::Submitted, true, 1, 0x04190419ULL, L"#");
+        passed &= CheckCase("standalone punctuation", fixture, desktop, 0, L"?", 1, 1,
+                            L",", lshift::TextStatus::Submitted, true, 1, 0x04190419ULL, L"?");
+        passed &= CheckCase("symbols-only selection", fixture, desktop, 0, L"# @ $ ^ & .", 0, 11,
+                            L"№ \" ; : ? ю", lshift::TextStatus::Converted, true, 11);
         passed &= CheckCase("no history toggles only", fixture, desktop, 0, L"ghbdtn", 6, 6,
                             L"ghbdtn", lshift::TextStatus::Switched, true, 6);
         passed &= CheckCase("selection takes priority", fixture, desktop, 0,

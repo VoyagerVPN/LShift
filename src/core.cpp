@@ -71,31 +71,44 @@ static_assert(kUsShift.size() == kRuShift.size());
 bool Latin(wchar_t c) noexcept { return (c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z'); }
 bool Russian(wchar_t c) noexcept { return (c >= L'а' && c <= L'я') || (c >= L'А' && c <= L'Я') || c == L'ё' || c == L'Ё'; }
 bool WordCharacter(wchar_t c) noexcept {
-    return Latin(c) || Russian(c) || (c >= L'0' && c <= L'9') ||
-           std::wstring_view(L"_`[]{}\\|;'\",./~<>:").find(c) != std::wstring_view::npos;
+    // Знаки с физических клавиш входят в исправляемый фрагмент вместе с буквами.
+    // Дефис по-прежнему разделяет слова, в том числе с разными алфавитами.
+    return c != L'-' && (kUs.find(c) != std::wstring_view::npos ||
+        kRu.find(c) != std::wstring_view::npos || kUsShift.find(c) != std::wstring_view::npos ||
+        kRuShift.find(c) != std::wstring_view::npos);
 }
-}
-std::wstring Convert(std::wstring_view text, Direction direction) {
+wchar_t ConvertCharacter(wchar_t c, Direction direction) noexcept {
     const auto source = direction == Direction::ToRussian ? kUs : kRu;
     const auto target = direction == Direction::ToRussian ? kRu : kUs;
     const auto source_shift = direction == Direction::ToRussian ? kUsShift : kRuShift;
     const auto target_shift = direction == Direction::ToRussian ? kRuShift : kUsShift;
+    if(const auto lower = source.find(c); lower != std::wstring_view::npos) return target[lower];
+    if(const auto upper = source_shift.find(c); upper != std::wstring_view::npos) return target_shift[upper];
+    return c;
+}
+}
+std::wstring Convert(std::wstring_view text, Direction direction) {
     std::wstring result(text);
-    for(auto& c : result) {
-        const auto lower = source.find(c);
-        if(lower != std::wstring_view::npos) c = target[lower];
-        else if(const auto upper = source_shift.find(c); upper != std::wstring_view::npos) c = target_shift[upper];
-    }
+    for(auto& c : result) c = ConvertCharacter(c, direction);
     return result;
 }
-std::optional<Direction> DetectDirection(std::wstring_view text) noexcept {
+std::optional<Direction> DetectDirection(std::wstring_view text, std::optional<Direction> symbol_direction) noexcept {
     bool latin = false;
     bool russian = false;
     for(const auto c : text) { latin = latin || Latin(c); russian = russian || Russian(c); }
-    if(latin == russian) return std::nullopt;
+    if(latin && russian) return std::nullopt;
+    if(!latin && !russian) {
+        // У знаков вроде точки нет собственного алфавита. Их физическую пару
+        // задаёт раскладка поля; неизменяемые цифры не создают преобразование.
+        if(symbol_direction) {
+            for(const auto c : text)
+                if(ConvertCharacter(c, *symbol_direction) != c) return symbol_direction;
+        }
+        return std::nullopt;
+    }
     return latin ? Direction::ToRussian : Direction::ToEnglish;
 }
-WordConversion ConvertWords(std::wstring_view text) {
+WordConversion ConvertWords(std::wstring_view text, std::optional<Direction> symbol_direction) {
     WordConversion result{std::wstring(text), std::nullopt};
     std::size_t start = 0;
     while(start < text.size()) {
@@ -104,7 +117,7 @@ WordConversion ConvertWords(std::wstring_view text) {
         while(end < text.size() && WordCharacter(text[end])) ++end;
         const auto word = text.substr(start, end - start);
         // Смешанное слово сохраняется целиком; соседние слова от него не зависят.
-        if(const auto direction = DetectDirection(word)) {
+        if(const auto direction = DetectDirection(word, symbol_direction)) {
             result.text.replace(start, word.size(), Convert(word, *direction));
             result.last_direction = direction;
         }
@@ -115,8 +128,7 @@ WordConversion ConvertWords(std::wstring_view text) {
 std::optional<TextSpan> LastWord(std::wstring_view text, std::size_t caret) noexcept {
     if(caret > text.size()) return std::nullopt;
     std::size_t end = caret;
-    while(end > 0 && (text[end - 1] == L' ' || text[end - 1] == L'\t' ||
-                     std::wstring_view(L"!?()").find(text[end - 1]) != std::wstring_view::npos)) --end;
+    while(end > 0 && (text[end - 1] == L' ' || text[end - 1] == L'\t')) --end;
     std::size_t start = end;
     while(start > 0 && WordCharacter(text[start - 1])) --start;
     if(start == end) return std::nullopt;

@@ -246,7 +246,9 @@ struct NativeState {
         return Result(TextStatus::Unsupported, LocalizedText(StringId::StatusTheTextRangeIsTooLarge, guard.request.language));
     }
     const auto original = std::wstring_view(before.text).substr(span->start, span->length);
-    const auto conversion = ConvertWords(original);
+    const auto conversion = ConvertWords(original,
+        GetKeyboardLayout(GetWindowThreadProcessId(focus, nullptr)) == layouts.english
+            ? Direction::ToRussian : Direction::ToEnglish);
     const auto direction = conversion.last_direction;
     if (!direction) return Toggle(guard, focus, layouts);
     const std::wstring& replacement = conversion.text;
@@ -603,8 +605,9 @@ void ReleaseOwnCopyKeys() noexcept {
         const UINT scan = MapVirtualKeyExW(key.key, MAPVK_VK_TO_VSC, layout);
         // Флаг 4 не изменяет системное состояние dead keys; перевод только на worker по жесту.
         const int count = ToUnicodeEx(key.key, scan, state, decoded, static_cast<int>(std::size(decoded)), 4, layout);
-        if (count != 1 || !((decoded[0] >= L' ' && decoded[0] <= L'~') ||
-            (decoded[0] >= L'А' && decoded[0] <= L'я') || decoded[0] == L'ё' || decoded[0] == L'Ё')) return false;
+        // ToUnicodeEx уже использует подтверждённую RU/US-раскладку. Ограничение
+        // ASCII и кириллицей ошибочно исключало штатный символ Shift+3: №.
+        if (count != 1 || decoded[0] < L' ' || decoded[0] == L'\x7F') return false;
         text.push_back(decoded[0]);
     }
     return true;
@@ -643,7 +646,8 @@ void ReleaseOwnCopyKeys() noexcept {
         return Result(TextStatus::Stale, LocalizedText(StringId::StatusTypedWordMismatch, guard.request.language));
     }
     const auto original = prefix.substr(word->start, word->length);
-    const auto direction = DetectDirection(original);
+    const auto direction = DetectDirection(original,
+        layout == layouts.english ? Direction::ToRussian : Direction::ToEnglish);
     if (!direction) return toggle();
     // Парные символы могут удаляться редактором вместе с символом справа от курсора.
     // В таком контексте количество Backspace не доказывает безопасный диапазон удаления.
@@ -769,7 +773,9 @@ void ReleaseOwnCopyKeys() noexcept {
         // Отсутствие ACK после известного слова — ошибка копирования, а не команда смены языка.
         return Result(TextStatus::Partial, LocalizedText(StringId::StatusCopyUnconfirmed, guard.request.language));
     }
-    const auto conversion = ConvertWords(original);
+    const auto conversion = ConvertWords(original,
+        GetKeyboardLayout(GetWindowThreadProcessId(focus, nullptr)) == layouts.english
+            ? Direction::ToRussian : Direction::ToEnglish);
     const auto direction = conversion.last_direction;
     if (!direction) return Toggle(guard, focus, layouts);
     const std::wstring& replacement = conversion.text;

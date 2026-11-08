@@ -25,7 +25,7 @@ const suite = option('--suite', 'first');
 if (!['first', 'selection', 'recent', 'full'].includes(suite)) throw new Error('--suite must be first, selection, recent or full');
 const selectedCase = option('--case', null);
 const legacyProbe = args.includes('--legacy-probe');
-function typedEvents(tokens) {
+function typedEvents(tokens, layout = 0x04090409) {
   const events = [];
   const stroke = (vk, code, key, text = '', modifiers = 0) => {
     events.push({vk, code, key, text, modifiers, down: true}, {vk, code, key, text: '', modifiers, down: false});
@@ -57,7 +57,22 @@ function typedEvents(tokens) {
       if (shifted) events.push({vk: 160, code: 'ShiftLeft', key: 'Shift', text: '', modifiers: 8, down: true});
       stroke(token.toUpperCase().charCodeAt(0), `Key${token.toUpperCase()}`, token, token, shifted ? 8 : 0);
       if (shifted) events.push({vk: 160, code: 'ShiftLeft', key: 'Shift', text: '', modifiers: 0, down: false});
-    } else throw new Error('Unsupported fixture key token');
+    } else {
+      const source = layout === 0x04190419
+        ? ['ё1234567890-=йцукенгшщзхъ\\фывапролджэячсмитьбю.', 'Ё!"№;%:?*()_+ЙЦУКЕНГШЩЗХЪ/ФЫВАПРОЛДЖЭЯЧСМИТЬБЮ,']
+        : ['`1234567890-=qwertyuiop[]\\asdfghjkl;\'zxcvbnm,./', '~!@#$%^&*()_+QWERTYUIOP{}|ASDFGHJKL:"ZXCVBNM<>?'];
+      const physical = [192,49,50,51,52,53,54,55,56,57,48,189,187,81,87,69,82,84,89,85,73,79,80,219,221,220,65,83,68,70,71,72,74,75,76,186,222,90,88,67,86,66,78,77,188,190,191];
+      const oemCodes = {186:'Semicolon',187:'Equal',188:'Comma',189:'Minus',190:'Period',191:'Slash',192:'Backquote',219:'BracketLeft',220:'Backslash',221:'BracketRight',222:'Quote'};
+      let index = source[0].indexOf(token);
+      const shifted = index < 0;
+      if (shifted) index = source[1].indexOf(token);
+      if (index < 0) throw new Error('Unsupported fixture key token');
+      const vk = physical[index];
+      const code = oemCodes[vk] ?? (vk >= 48 && vk <= 57 ? `Digit${vk - 48}` : `Key${String.fromCharCode(vk)}`);
+      if (shifted) events.push({vk:160,code:'ShiftLeft',key:'Shift',text:'',modifiers:8,down:true});
+      stroke(vk, code, token, token, shifted ? 8 : 0);
+      if (shifted) events.push({vk:160,code:'ShiftLeft',key:'Shift',text:'',modifiers:0,down:false});
+    }
   }
   return events;
 }
@@ -70,6 +85,19 @@ const longRussian = 'привет '.repeat(585) + 'п';
 const selectionCase = (name, kind, original, converted) => ({name, kind, text: `KEEP ${original} TAIL`,
   start: 5, end: 5 + original.length, expected: `KEEP ${converted} TAIL`, caret: 5 + converted.length});
 const cases = [
+  {name:'contenteditable-number-sign-word',kind:'contenteditable',text:'ghbdtn#',typed:true,tokens:[...'ghbdtn#'],
+    expected:'привет№',caret:7,roundTrip:true},
+  ...['input','textarea','contenteditable'].flatMap(kind => [
+    {name:`${kind}-number-sign-alone`,kind,text:'#',typed:true,tokens:['#'],expected:'№',caret:1,roundTrip:true},
+    {name:`${kind}-russian-number-sign`,kind,text:'привет№',typed:true,tokens:[...'привет№'],
+      sourceLayout:0x04190419,targetLayout:0x04090409,expected:'ghbdtn#',caret:7,roundTrip:true},
+    {name:`${kind}-number-row-symbols`,kind,text:'ghbdtn@#$%^&*',typed:true,tokens:[...'ghbdtn@#$%^&*'],
+      expected:'привет"№;%:?*',caret:13,roundTrip:true},
+    {name:`${kind}-question-mark`,kind,text:'ghbdtn?',typed:true,tokens:[...'ghbdtn?'],expected:'привет,',caret:7,roundTrip:true},
+    {name:`${kind}-punctuation-alone`,kind,text:'.',typed:true,tokens:['.'],expected:'ю',caret:1,roundTrip:true},
+    {...selectionCase(`${kind}-selection-symbols`,kind,'# @ $ ^ & .', '№ " ; : ? ю'),targetLayout:0x04190419},
+    {...selectionCase(`${kind}-selection-russian-symbols`,kind,'№ " ; : ? .', '# @ $ ^ & /'),sourceLayout:0x04190419,targetLayout:0x04090409},
+  ]),
   {name: 'input-combobox-word', kind: 'input', inputRole: 'combobox', text: 'ghbdtn', typed: true,
     tokens: wordTokens, expected: 'привет', caret: 6, roundTrip: true},
   {...selectionCase('input-combobox-selection', 'input', 'ghbdtn', 'привет'), inputRole: 'combobox'},
@@ -322,7 +350,7 @@ try {
   if (prepared.status !== 'Prepared' || prepared.layout_after !== sourceLayout) throw new Error('Own fixture source layout was not prepared');
   let recentArguments = [];
   if (test.typed) {
-    for (const event of typedEvents(test.tokens)) {
+    for (const event of typedEvents(test.tokens, sourceLayout)) {
       await page.call('Input.dispatchKeyEvent', {type: event.down ? 'keyDown' : 'keyUp', key: event.key, code: event.code,
         windowsVirtualKeyCode: event.vk, modifiers: event.modifiers, ...(event.text ? {text: event.text, unmodifiedText: event.text} : {})});
     }
@@ -331,7 +359,7 @@ try {
       throw new Error(`Actual fixture typing did not match specification: ${test.name}`);
     }
     if (!legacyProbe && test.journal !== false) {
-      const stream = typedEvents(test.journalTokens ?? test.tokens).map(event => `${event.vk}:${event.down ? 1 : 0}`).join(',');
+      const stream = typedEvents(test.journalTokens ?? test.tokens, sourceLayout).map(event => `${event.vk}:${event.down ? 1 : 0}`).join(',');
       recentArguments = ['--recent-events', stream, '--recent-layout', String(sourceLayout)];
     }
     await evaluate(`window.lshiftFixture.beginObservation(${JSON.stringify({allowedValues: [test.text, test.expected]})})`);
@@ -382,7 +410,7 @@ try {
       const reverse = await probe(env, browserPid, recentArguments.slice(0, 2));
       await pause(250);
       const reversed = await evaluate('window.lshiftFixture.oracle()');
-      record.roundTripMatches &&= reverse.status === 'Submitted' && reverse.layout_after === (trip % 2 === 0 ? 0x04090409 : 0x04190419) &&
+      record.roundTripMatches &&= reverse.status === 'Submitted' && reverse.layout_after === (trip % 2 === 0 ? sourceLayout : (test.targetLayout ?? 0x04190419)) &&
         reversed.value === (trip % 2 === 0 ? test.text : test.expected) && reversed.start === test.caret && reversed.end === test.caret &&
         reversed.inputEvents.filter(event => event.type === 'insertText').length === (trip + 2) * wordUnits &&
         reversed.inputEvents.filter(event => event.type === 'deleteContentBackward').length === (trip + 2) * wordUnits &&

@@ -61,7 +61,10 @@ struct WordConversion {
 };
 struct TextSpan { std::size_t start = 0; std::size_t length = 0; };
 [[nodiscard]] std::wstring Convert(std::wstring_view text, Direction direction);
-[[nodiscard]] WordConversion ConvertWords(std::wstring_view text);
-[[nodiscard]] std::optional<Direction> DetectDirection(std::wstring_view text) noexcept;
+// Направление для знаков без букв задаётся раскладкой поля. Смешанные слова сохраняются.
+[[nodiscard]] WordConversion ConvertWords(std::wstring_view text,
+    std::optional<Direction> symbol_direction = std::nullopt);
+[[nodiscard]] std::optional<Direction> DetectDirection(std::wstring_view text,
+    std::optional<Direction> symbol_direction = std::nullopt) noexcept;
 [[nodiscard]] std::optional<TextSpan> LastWord(std::wstring_view text, std::size_t caret) noexcept;
 }

@@ -108,6 +108,24 @@ int main() {
         Require(!DetectDirection(L"hello привет"), "one direction cannot represent both alphabets");
         Require(!DetectDirection(L"12345"), "numbers do not imply a text conversion direction");
         std::cout << "PASS: RU-US conversion\n";
+        const auto numbered_word = LastWord(L"ghbdtn#", 7);
+        Require(numbered_word && numbered_word->start == 0 && numbered_word->length == 7 &&
+                ConvertWords(L"ghbdtn#").text == L"привет№",
+                "a number-row symbol stays in the word and converts on its physical key");
+        Require(ConvertWords(L"# @ $ ^ &", Direction::ToRussian).text == L"№ \" ; : ?" &&
+                ConvertWords(L"№ \" ; : ?", Direction::ToEnglish).text == L"# @ $ ^ &",
+                "standalone symbols convert in the source layout without requiring letters");
+        Require(ConvertWords(L"~!@#$%^&*()_+{}|:\"<>?", Direction::ToRussian).text ==
+                L"Ё!\"№;%:?*()_+ХЪ/ЖЭБЮ," &&
+                ConvertWords(L"Ё!\"№;%:?*()_+ХЪ/ЖЭБЮ,", Direction::ToEnglish).text ==
+                L"~!@#$%^&*()_+{}|:\"<>?",
+                "shifted number-row and punctuation keys keep their physical pairs in both directions");
+        Require(ConvertWords(L". , ; ' /", Direction::ToRussian).text == L"ю б ж э ." &&
+                ConvertWords(L". , ; : ?", Direction::ToEnglish).text == L"/ ? $ ^ &",
+                "ambiguous standalone punctuation follows the source layout");
+        Require(ConvertWords(L"приvet# 12345 🙂", Direction::ToRussian).text == L"приvet# 12345 🙂" &&
+                !ConvertWords(L"12345 !()_-+=", Direction::ToRussian).last_direction,
+                "source-layout fallback preserves mixed words and does not replace unchanged symbols");
         const auto bilingual = ConvertWords(L"привет ghbdtn");
         Require(bilingual.text == L"ghbdtn привет" &&
                 bilingual.last_direction == Direction::ToRussian,
